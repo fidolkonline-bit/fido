@@ -111,11 +111,17 @@ export async function updateCheque(user: CurrentUser, chequeId: string, action: 
       await tx.payment.create({
         data: {
           number: await nextNumber(tx, p.direction === "IN" ? "PAYMENT_OUT" : "PAYMENT_IN"), direction: p.direction === "IN" ? "OUT" : "IN",
-          method: "CHEQUE", amount, accountId: p.accountId, contactId: p.contactId, reversesId: p.id,
+          method: "CHEQUE", amount, accountId: p.accountId, contactId: p.contactId, reversesId: p.id, collectionId: p.collectionId,
           reference: `${action === "BOUNCE" ? "Bounced" : "Cancelled"} cheque ${c.number}`, createdById: user.personId,
         },
       });
       // Restore what is owed on whatever the cheque paid.
+      if (p.collectionId) {
+        // A debt receipt: every invoice / opening balance it settled owes again (loaded lazily: debt.ts imports this file).
+        const { undoCollection } = await import("./debt");
+        await undoCollection(tx, p.collectionId);
+        await tx.debtCollection.update({ where: { id: p.collectionId }, data: { state: action === "BOUNCE" ? "BOUNCED" : "REVERSED", stateReason: `${action === "BOUNCE" ? "Bounced" : "Cancelled"} cheque ${c.number}${note ? `: ${note}` : ""}`, stateAt: new Date(), stateById: user.personId } });
+      }
       if (p.saleId) {
         const s = await tx.sale.update({ where: { id: p.saleId }, data: { paid: { decrement: amount } } });
         await tx.sale.update({ where: { id: s.id }, data: { paymentState: D(s.paid).lte(0) ? "DUE" : "PARTIAL" } });

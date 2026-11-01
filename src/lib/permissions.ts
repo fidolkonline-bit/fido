@@ -17,6 +17,12 @@ export const PERMISSIONS = {
   "sales.credit_override": "Sell beyond customer credit limit",
   "pricing.tier_override": "Choose a different price tier for a sale (tiers allowed for the role)",
   "pricing.manage": "Manage price tiers, product tier prices and customer group pricing",
+  "debt.view": "See customer debt, overdue amounts and payment history at the POS",
+  "debt.receive": "Receive customer debt payments",
+  "debt.allocate": "Choose which invoices / opening balance a debt payment settles",
+  "debt.account": "Choose the receiving account for a debt payment",
+  "debt.backdate": "Record a debt payment with an earlier paid-on date",
+  "debt.reverse": "Reverse a recorded debt payment",
   "returns.create": "Process sell returns, refunds and exchanges",
   "stock.adjust": "Stock adjustments, write-offs and hold releases",
   "stock.transfer": "Send and receive stock transfers",
@@ -58,7 +64,7 @@ export const DEFAULT_ROLES: { name: string; description: string; permissions: Pe
     permissions: [
       "contacts.view", "contacts.manage", "products.view", "products.manage", "cost.view",
       "purchases.view", "purchases.post", "sales.view", "sales.create", "sales.override_price",
-      "sales.credit_override", "pricing.tier_override", "register.operate", "register.review", "accounts.view", "reports.view",
+      "sales.credit_override", "pricing.tier_override", "debt.view", "debt.receive", "debt.allocate", "debt.account", "debt.backdate", "debt.reverse", "register.operate", "register.review", "accounts.view", "reports.view",
       "returns.create", "stock.adjust", "stock.transfer", "expenses.view", "expenses.manage", "purchases.claims", "imports.run",
       "repairs.view", "repairs.manage", "repairs.credentials", "reloads.request", "reloads.process", "reloads.wallets", "tasks.manage",
       "hr.view", "leave.approve", "attendance.manage", "essentials.manage",
@@ -67,7 +73,7 @@ export const DEFAULT_ROLES: { name: string; description: string; permissions: Pe
   {
     name: "Cashier",
     description: "POS and register at assigned locations",
-    permissions: ["contacts.view", "contacts.manage", "products.view", "sales.view", "sales.create", "register.operate", "repairs.view", "repairs.manage", "reloads.process"],
+    permissions: ["contacts.view", "contacts.manage", "products.view", "sales.view", "sales.create", "debt.view", "debt.receive", "register.operate", "repairs.view", "repairs.manage", "reloads.process"],
   },
   {
     name: "Stock clerk",

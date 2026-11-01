@@ -329,3 +329,15 @@ table.dt { width: 100%; border-collapse: collapse; font-size: 13px; }
 /* Theme switch: icon + label on desktop, icon only on phones */
 .theme-switch { gap: 6px; }
 @media (max-width: 760px) { .theme-switch .theme-label { display: none; } .theme-switch { padding: 4px 9px; } }
+
+/* POS dialogs (debt repayment, history): the cart stays underneath, untouched. */
+.modal-scrim { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); z-index: 60; display: flex; align-items: flex-start; justify-content: center; padding: 24px 16px; overflow-y: auto; }
+.modal { width: min(600px, 100%); background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius); padding: 16px; box-shadow: 0 12px 32px rgba(0, 0, 0, 0.3); }
+.modal h2 { margin: 0; }
+.debt-strip { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.debt-strip > div { background: var(--wash); border-radius: var(--radius); padding: 6px 8px; font-size: 12px; color: var(--muted); }
+.debt-strip strong { display: block; font-size: 15px; color: var(--ink); font-variant-numeric: tabular-nums; font-weight: 600; }
+.alloc { display: grid; grid-template-columns: 1fr auto auto; gap: 4px 12px; font-size: 13px; align-items: center; }
+.alloc .num { text-align: right; }
+.alloc input { width: 110px; min-height: 32px; text-align: right; }
+@media (max-width: 480px) { .debt-strip { grid-template-columns: 1fr 1fr; } .modal-scrim { padding: 8px; } }

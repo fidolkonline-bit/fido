@@ -59,7 +59,7 @@ export default async function Contacts({ searchParams }: { searchParams: Promise
           {
             label: supplier ? "We owe" : "Due", num: true,
             render: (c) => {
-              const due = D(c.openingBalance).plus((supplier ? grnDue : saleDue).get(c.id) ?? 0);
+              const due = D(c.openingBalance).minus(supplier ? 0 : c.openingPaid).plus((supplier ? grnDue : saleDue).get(c.id) ?? 0);
               return <span style={{ color: due.gt(0) ? "var(--err)" : undefined }}>{money(due)}</span>;
             },
           },

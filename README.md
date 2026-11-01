@@ -64,6 +64,7 @@ Supabase's public REST API; the app reaches Postgres only through Prisma.
 | `src/lib/sales.ts` | POS finalize: price/discount limits, FIFO allocation, commission accrual, payments, idempotency |
 | `src/lib/purchases.ts` | GRN posting: accepted qty → cost layer + movement; supplier payment kept separate |
 | `src/lib/stock.ts` | Availability and row-locked FIFO allocation |
+| `src/lib/debt.ts`, `debt-rules.ts` | Customer debt ledger, repayment receipts and allocation order (shared with the POS preview) |
 | `src/lib/numbering.ts` | Concurrency-safe document numbers (`INV2026/0001`, `PO2026/0001`, …) |
 | `src/lib/auth.ts` | DB-backed sessions (revocable), server-side permission guards |
 | `src/lib/permissions.ts` | Permission keys and default roles |
@@ -159,6 +160,29 @@ payment accounts, first reports, settings.
 - Customer groups pick a tier or a % on the default price. The POS shows customer and tier together; an override needs
   `pricing.tier_override` and role access. Changing customer or tier previews the new prices — Apply or Cancel — and
   keeps lots, devices and quantities. Sales store the price rule, rule price and tier name as sold.
+  The preview shows the subtotal difference and the discounts affected; a tier picked by hand is not carried over
+  to another customer. Scanning an internal lot label that names one saleable lot here preselects that lot.
+
+**Customer debt at the POS (change sheet 01, CR-03):**
+- Customer search by name, mobile or customer ID; results show a masked mobile and the ID, and several matches are
+  listed for the cashier to pick. The selected customer shows previous debt, the overdue part (from pay terms) and
+  advance / store credit separately, loaded live ("Loading balance" / "Balance unavailable", never a false 0).
+- Previous debt and the current sale are labelled apart; debt is never added to the cart. Receive payment opens over
+  the POS and leaves the cart as it is (it also works with an empty cart): amount blank, Pay full debt, method,
+  receiving account (default for the method / this register), paid-on date, reference / note / cheque details.
+- Proposed allocation (not legacy behaviour): oldest due date first, the opening balance counting its reference
+  date; invoices without a due date after dated ones, by date. Change allocation needs `debt.allocate`.
+- More than the debt must be kept as advance credit or (cash only) given back as change. Store credit can be applied
+  to debt explicitly. A cheque settles only the debt, shows as pending, and a bounce puts the debt back.
+- One receipt (`RCP2026/0001`) = one money movement (cash to the register, card/bank to its account) plus its
+  allocations, committed together under a lock on the customer. No sale, stock movement, revenue or commission.
+  A changed balance (competing payment or return) is refused until the new allocation is reviewed; retries return
+  the same receipt; after a timeout the POS checks the receipt status before collecting again.
+- Print / SMS receipt after posting (SMS failure never touches the payment). Debt payments list, RP-37 Customer debt
+  collections, receipts in RP-15 / RP-22 / RP-23, the customer page and the invoice. Opening balances are paid down
+  (`Contact.openingPaid`), so every debt figure (lists, RP-17, RP-24, credit limit) nets them off.
+- Permissions: `debt.view`, `debt.receive` (Cashier has both), `debt.allocate`, `debt.account`, `debt.backdate`,
+  `debt.reverse` (Manager, Owner). Corrections are linked reversals; the receipt stays, marked reversed.
 
 Before the first live payroll: set up EPF/ETF, tax and any overtime / holiday-pay rules as pay components and
 check them against approved sample payslips (spec §26).

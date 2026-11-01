@@ -53,6 +53,7 @@ export const NAV: NavGroup[] = [
     items: [
       { label: "POS", href: "/pos", perm: "sales.create" },
       { label: "All sales", href: "/sales", perm: "sales.view" },
+      { label: "Debt payments", href: "/sales/collections", perm: "debt.view" },
       { label: "Sell Return / Exchange", href: "/returns", perm: "sales.view" },
       { label: "Quotes & suspended sales", href: "/sales/drafts", perm: "sales.view" },
       { label: "Subscriptions", href: "/sales/subscriptions", perm: "sales.create" },

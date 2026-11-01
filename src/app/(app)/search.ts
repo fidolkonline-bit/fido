@@ -13,6 +13,8 @@ export type ProductHit = {
   offer: { ruleId: string; name: string; perUnit: string } | null;
   // Price matrix for this product (usable tier prices; tiers whose 0 price is unverified are listed apart).
   tierPrices: Record<string, string>; zeroUnverified: string[];
+  // A scanned internal lot label that names exactly one saleable lot here: that lot is preselected in the cart.
+  scannedLayerId?: string;
 };
 
 const deviceSelect = { id: true, imei1: true, imei2: true, serial: true, condition: true } as const;
@@ -52,7 +54,12 @@ export async function searchProducts(q: string, forSale = true): Promise<Product
   const exact = (p: (typeof products)[number]) => p.id === device?.productId || p.sku.toLowerCase() === term.toLowerCase() || p.barcode === term;
   products.sort((a, b) => Number(exact(b)) - Number(exact(a)));
 
-  return toHits(user, products, device);
+  // Lot text alone is not unique: only a label matching a single saleable lot of the product here resolves its source.
+  const lotMatches = loc
+    ? await db.costLayer.findMany({ where: { locationId: loc, bucket: "SALEABLE", qtyRemaining: { gt: 0 }, lotCode: { equals: term, mode: "insensitive" }, productId: { in: products.map((p) => p.id) } }, select: { id: true, productId: true } })
+    : [];
+  const hits = await toHits(user, products, device);
+  return hits.map((h) => { const m = lotMatches.filter((l) => l.productId === h.id); return m.length === 1 && !h.tracked ? { ...h, scannedLayerId: m[0].id } : h; });
 }
 
 type Prod = Awaited<ReturnType<typeof db.product.findMany>>[number];

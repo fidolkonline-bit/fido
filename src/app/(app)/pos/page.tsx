@@ -38,14 +38,16 @@ export default async function PosPage({ searchParams }: { searchParams: Promise<
         return [{ product: h, qty: Number(l.qty), price: String(l.unitPrice), discount: String(Math.max(0, Math.round((Number(l.discount) - offer) * 100) / 100) || "") }]; }),
     };
   }
-  const [business, profiles, accounts, preset, credit, tiers, presetPolicy] = await Promise.all([
+  const [business, profiles, accounts, preset, credit, tiers, presetPolicy, recvAccounts] = await Promise.all([
     db.business.findFirstOrThrow(),
     db.commissionProfile.findMany({ where: { active: true, person: { active: true } }, include: { person: true }, orderBy: { person: { fullName: "asc" } } }),
     db.account.findMany({ where: { active: true, type: { in: ["CARD", "BANK"] } }, orderBy: { name: "asc" }, select: { id: true, name: true, type: true } }),
-    customerId ? db.contact.findUnique({ where: { id: customerId }, select: { id: true, name: true, phone: true } }) : null,
+    customerId ? db.contact.findUnique({ where: { id: customerId }, select: { id: true, name: true, phone: true, code: true } }) : null,
     customerId ? db.storeCreditEntry.aggregate({ where: { contactId: customerId }, _sum: { amount: true } }) : null,
     tiersFor(user),
     customerPolicy(db, customerId ?? null),
+    // Accounts a debt payment may land in (the server re-checks type, location and permission).
+    db.account.findMany({ where: { active: true }, orderBy: { createdAt: "asc" }, select: { id: true, name: true, type: true, locationId: true } }),
   ]);
 
   return (
@@ -63,6 +65,9 @@ export default async function PosPage({ searchParams }: { searchParams: Promise<
         initialCustomer={preset ? { ...preset, storeCredit: Number(credit?._sum.amount ?? 0), pricing: presetPolicy } : null}
         tiers={tiers}
         canOverrideTier={can(user, "settings.manage") || can(user, "pricing.tier_override")}
+        locationId={loc!.id}
+        recvAccounts={recvAccounts}
+        debtPerms={{ view: can(user, "debt.view"), receive: can(user, "debt.view") && can(user, "debt.receive"), allocate: can(user, "debt.allocate"), account: can(user, "debt.account"), backdate: can(user, "debt.backdate") }}
       />
     </div>
   );

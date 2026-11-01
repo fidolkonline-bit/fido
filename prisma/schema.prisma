@@ -38,29 +38,30 @@ model Location {
   active     Boolean  @default(true)
   createdAt  DateTime @default(now())
 
-  userLocations  UserLocation[]
-  costLayers     CostLayer[]
-  movements      StockMovement[]
-  receipts       GoodsReceipt[]
-  sales          Sale[]
-  registers      RegisterSession[]
-  accounts       Account[]
-  returns        SaleReturn[]
-  adjustments    StockAdjustment[]
-  transfersOut   StockTransfer[]   @relation("TransferFrom")
-  transfersIn    StockTransfer[]   @relation("TransferTo")
-  expenses       Expense[]
-  devices        DeviceIdentity[]
-  purchaseOrders PurchaseOrder[]
-  claims         SupplierClaim[]
-  repairs        RepairJob[]
-  reloads        ReloadRequest[]
-  tasks          StaffTask[]
-  parcels        BusParcel[]
-  wallets        ReloadWallet[]
-  holidays       Holiday[]
-  employees      EmployeeProfile[]
-  clockEvents    ClockEvent[]
+  userLocations   UserLocation[]
+  costLayers      CostLayer[]
+  movements       StockMovement[]
+  receipts        GoodsReceipt[]
+  sales           Sale[]
+  debtCollections DebtCollection[]
+  registers       RegisterSession[]
+  accounts        Account[]
+  returns         SaleReturn[]
+  adjustments     StockAdjustment[]
+  transfersOut    StockTransfer[]   @relation("TransferFrom")
+  transfersIn     StockTransfer[]   @relation("TransferTo")
+  expenses        Expense[]
+  devices         DeviceIdentity[]
+  purchaseOrders  PurchaseOrder[]
+  claims          SupplierClaim[]
+  repairs         RepairJob[]
+  reloads         ReloadRequest[]
+  tasks           StaffTask[]
+  parcels         BusParcel[]
+  wallets         ReloadWallet[]
+  holidays        Holiday[]
+  employees       EmployeeProfile[]
+  clockEvents     ClockEvent[]
 }
 
 model NumberScheme {
@@ -89,6 +90,7 @@ model Person {
   login                 LoginAccount?
   commissionProfile     CommissionProfile?
   createdSales          Sale[]                 @relation("SaleCreator")
+  debtCollections       DebtCollection[]
   salespersonSales      Sale[]                 @relation("SaleSalesperson")
   agentSales            Sale[]                 @relation("SaleAgent")
   accruals              CommissionAccrual[]
@@ -260,12 +262,15 @@ model Contact {
   creditLimit    Decimal?       @db.Decimal(14, 2)
   payTermDays    Int?
   openingBalance Decimal        @default(0) @db.Decimal(14, 2)
+  // Part of the opening balance settled by debt payments (CR-03). Opening due = openingBalance − openingPaid.
+  openingPaid    Decimal        @default(0) @db.Decimal(14, 2)
   active         Boolean        @default(true)
   createdAt      DateTime       @default(now())
 
-  sales    Sale[]
-  receipts GoodsReceipt[]
-  payments Payment[]
+  sales       Sale[]
+  collections DebtCollection[]
+  receipts    GoodsReceipt[]
+  payments    Payment[]
 
   storeCredits StoreCreditEntry[]
   expenses     Expense[]
@@ -634,6 +639,8 @@ model Sale {
   returns SaleReturn[]
 
   shipments Shipment[]
+
+  debtAllocations DebtAllocation[]
 
   @@index([soldAt])
   @@index([customerId])
@@ -1547,15 +1554,16 @@ model NotificationIntent {
 // ───────────── Money (§8.2, §16) ─────────────
 
 model Account {
-  id             String    @id @default(cuid())
-  name           String    @unique
+  id             String           @id @default(cuid())
+  name           String           @unique
   type           String // CASH, BANK, CARD, WALLET, OWNER_COLLECTION
   locationId     String?
-  location       Location? @relation(fields: [locationId], references: [id])
-  openingBalance Decimal   @default(0) @db.Decimal(14, 2)
-  active         Boolean   @default(true)
-  createdAt      DateTime  @default(now())
+  location       Location?        @relation(fields: [locationId], references: [id])
+  openingBalance Decimal          @default(0) @db.Decimal(14, 2)
+  active         Boolean          @default(true)
+  createdAt      DateTime         @default(now())
   payments       Payment[]
+  collections    DebtCollection[]
 }
 
 model Payment {
@@ -1599,6 +1607,10 @@ model Payment {
   settlementId String?
   settlement   CommissionSettlement? @relation(fields: [settlementId], references: [id])
 
+  // Debt payment receipt this money belongs to (the receipt itself, or its reversal / bounce).
+  collectionId String?
+  collection   DebtCollection? @relation(fields: [collectionId], references: [id], onDelete: Restrict)
+
   cheque     Cheque?
   // A bounced cheque is reversed by an opposite payment pointing back at the original.
   reversesId String?  @unique
@@ -1606,24 +1618,82 @@ model Payment {
   reversedBy Payment? @relation("PaymentReversal")
 
   @@index([paidAt])
+  @@index([collectionId])
+}
+
+// A customer paying previous debt (CR-03): one receipt and one money movement, split over invoices and the opening
+// balance by its allocations. It never creates a sale, moves stock or accrues commission.
+model DebtCollection {
+  id             String           @id @default(cuid())
+  number         String           @unique
+  idempotencyKey String           @unique
+  customerId     String
+  customer       Contact          @relation(fields: [customerId], references: [id])
+  locationId     String
+  location       Location         @relation(fields: [locationId], references: [id])
+  method         String // CASH, CARD, BANK_TRANSFER, CHEQUE, STORE_CREDIT, OTHER
+  // tendered = what the customer handed over; change was given back; received = tendered − change (money kept).
+  tendered       Decimal          @db.Decimal(14, 2)
+  change         Decimal          @default(0) @db.Decimal(14, 2)
+  received       Decimal          @db.Decimal(14, 2)
+  allocated      Decimal          @db.Decimal(14, 2)
+  // Excess kept, at the customer's request, as advance (store credit).
+  advance        Decimal          @default(0) @db.Decimal(14, 2)
+  debtBefore     Decimal          @db.Decimal(14, 2)
+  debtAfter      Decimal          @db.Decimal(14, 2)
+  accountId      String?
+  account        Account?         @relation(fields: [accountId], references: [id])
+  registerId     String?
+  register       RegisterSession? @relation(fields: [registerId], references: [id])
+  paidAt         DateTime         @default(now())
+  reference      String?
+  note           String?
+  state          String           @default("POSTED") // POSTED, REVERSED, BOUNCED
+  stateReason    String?
+  stateAt        DateTime?
+  stateById      String?
+  createdById    String
+  createdBy      Person           @relation(fields: [createdById], references: [id])
+  createdAt      DateTime         @default(now())
+  allocations    DebtAllocation[]
+  payments       Payment[]
+
+  @@index([customerId])
+  @@index([paidAt])
+}
+
+// What one debt payment settled: an invoice (saleId) or the customer's opening balance (saleId null).
+model DebtAllocation {
+  id           String         @id @default(cuid())
+  collectionId String
+  collection   DebtCollection @relation(fields: [collectionId], references: [id])
+  saleId       String?
+  sale         Sale?          @relation(fields: [saleId], references: [id], onDelete: Restrict)
+  amount       Decimal        @db.Decimal(14, 2)
+  dueBefore    Decimal        @db.Decimal(14, 2)
+  dueAfter     Decimal        @db.Decimal(14, 2)
+
+  @@index([saleId])
+  @@index([collectionId])
 }
 
 model RegisterSession {
-  id            String    @id @default(cuid())
+  id            String           @id @default(cuid())
   locationId    String
-  location      Location  @relation(fields: [locationId], references: [id])
+  location      Location         @relation(fields: [locationId], references: [id])
   userId        String
-  user          Person    @relation(fields: [userId], references: [id])
-  openingCash   Decimal   @db.Decimal(14, 2)
-  openedAt      DateTime  @default(now())
+  user          Person           @relation(fields: [userId], references: [id])
+  openingCash   Decimal          @db.Decimal(14, 2)
+  openedAt      DateTime         @default(now())
   closedAt      DateTime?
-  expectedCash  Decimal?  @db.Decimal(14, 2)
-  countedCash   Decimal?  @db.Decimal(14, 2)
-  variance      Decimal?  @db.Decimal(14, 2)
+  expectedCash  Decimal?         @db.Decimal(14, 2)
+  countedCash   Decimal?         @db.Decimal(14, 2)
+  variance      Decimal?         @db.Decimal(14, 2)
   denominations Json?
   notes         String?
   sales         Sale[]
   payments      Payment[]
+  collections   DebtCollection[]
 
   @@index([locationId, closedAt])
 }

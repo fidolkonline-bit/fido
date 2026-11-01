@@ -11,6 +11,7 @@ import { ActionForm } from "@/components/ActionForm";
 import { SubmitButton } from "@/components/SubmitButton";
 import { salePaymentForm, newShipmentForm } from "../../payment-actions";
 import { getInvoiceLayout, receiptPaper } from "@/lib/settings";
+import { debtOf } from "@/lib/debt";
 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) {
   const row = await db.sale.findUnique({ where: { id: (await params).id }, select: { number: true } });
@@ -27,6 +28,7 @@ export default async function SaleDetail({ params, searchParams }: { params: Pro
       payments: { include: { account: true }, orderBy: { paidAt: "asc" } },
       returns: { orderBy: { createdAt: "asc" } },
       shipments: { orderBy: { createdAt: "asc" } },
+      debtAllocations: { include: { collection: { select: { id: true, number: true, method: true, paidAt: true, state: true } } }, orderBy: { collection: { paidAt: "asc" } } },
     },
   });
   if (!sale) notFound();
@@ -34,8 +36,7 @@ export default async function SaleDetail({ params, searchParams }: { params: Pro
   const layout = await getInvoiceLayout();
   const paper = (["A4", "80mm", "58mm"].includes(paperParam ?? "") ? paperParam : await receiptPaper(sale.locationId)) as string;
   const customerDue = layout.showCustomerDue && sale.customerId
-    ? await db.sale.aggregate({ where: { customerId: sale.customerId, stage: "FINAL" }, _sum: { total: true, paid: true, credited: true } }).then((a) =>
-        D(sale.customer!.openingBalance).plus(D(a._sum.total)).minus(D(a._sum.paid)).minus(D(a._sum.credited)))
+    ? (await debtOf(db, [sale.customerId])).get(sale.customerId) ?? null
     : null;
   const showCost = can(user, "cost.view");
   const due = D(sale.total).minus(sale.paid).minus(sale.credited);
@@ -83,6 +84,9 @@ export default async function SaleDetail({ params, searchParams }: { params: Pro
         <div className="totalrow grand"><span>Total</span><strong>Rs. {money(sale.total)}</strong></div>
         {sale.payments.map((p) => (
           <div key={p.id} className="totalrow small"><span>{p.direction === "OUT" ? "Refunded" : "Paid"} · {p.method.replace("_", " ").toLowerCase()}{p.reference ? ` (${p.reference})` : ""}</span><strong>{p.direction === "OUT" ? "−" : ""}{money(p.amount)}</strong></div>
+        ))}
+        {sale.debtAllocations.filter((a) => a.collection.state === "POSTED").map((a) => (
+          <div key={a.id} className="totalrow small"><span>Paid later · {a.collection.method.replace("_", " ").toLowerCase()} (receipt {a.collection.number})</span><strong>{money(a.amount)}</strong></div>
         ))}
         {sale.returns.map((r) => (
           <div key={r.id} className="totalrow small"><span>Returned · {r.number}</span><strong>−{money(r.totalValue)}</strong></div>

@@ -4,6 +4,7 @@ import { requirePermission, can } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { D, money, fmtDateTime } from "@/lib/money";
 import { PageHead, DataTable, RowLink, Badge, Stat } from "@/components/ui";
+import { debtOf, openingDue } from "@/lib/debt";
 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) {
   const row = await db.contact.findUnique({ where: { id: (await params).id }, select: { name: true } });
@@ -18,9 +19,11 @@ export default async function ContactDetail({ params }: { params: Promise<{ id: 
   const [sales, receipts, payments] = await Promise.all([
     c.isCustomer ? db.sale.findMany({ where: { customerId: c.id, stage: "FINAL" }, orderBy: { soldAt: "desc" }, take: 50 }) : [],
     c.isSupplier ? db.goodsReceipt.findMany({ where: { supplierId: c.id }, orderBy: { receivedAt: "desc" }, take: 50 }) : [],
-    db.payment.findMany({ where: { contactId: c.id }, orderBy: { paidAt: "desc" }, take: 50, include: { account: true } }),
+    db.payment.findMany({ where: { contactId: c.id }, orderBy: { paidAt: "desc" }, take: 50, include: { account: true, collection: { select: { id: true, state: true } } } }),
   ]);
-  const customerDue = D(c.isCustomer ? c.openingBalance : 0).plus(sales.reduce((a, s) => a.plus(s.total).minus(s.paid).minus(s.credited), D(0)));
+  // All open invoices count, not only the 50 listed below (the shared debt figure the POS shows too).
+  const customerDue = c.isCustomer ? (await debtOf(db, [c.id])).get(c.id) ?? D(0) : D(0);
+  const openingLeft = c.isCustomer ? openingDue(c) : D(0);
   const claimCredit = c.isSupplier ? await db.supplierClaim.aggregate({ where: { supplierId: c.id, status: "SETTLED" }, _sum: { creditAmount: true } }) : null;
   const supplierDue = D(c.isSupplier && !c.isCustomer ? c.openingBalance : 0).plus(receipts.reduce((a, r) => a.plus(r.total).minus(r.paid), D(0))).minus(D(claimCredit?._sum.creditAmount));
 
@@ -29,10 +32,10 @@ export default async function ContactDetail({ params }: { params: Promise<{ id: 
       <PageHead
         eyebrow={`Contacts / ${[c.isCustomer && "Customer", c.isSupplier && "Supplier"].filter(Boolean).join(" & ")}`}
         title={c.name}
-        actions={can(user, "contacts.manage") && <Link className="btn" href={`/contacts/${c.id}/edit`}>Edit</Link>}
+        actions={<>{c.isCustomer && can(user, "debt.receive") && can(user, "sales.create") && <Link className="btn" href={`/pos?customer=${c.id}`}>Receive payment at POS</Link>}{can(user, "contacts.manage") && <Link className="btn" href={`/contacts/${c.id}/edit`}>Edit</Link>}</>}
       />
       <div className="stats">
-        {c.isCustomer && <Stat label="Customer due" value={`Rs. ${money(customerDue)}`} basis="Opening + invoices − payments" />}
+        {c.isCustomer && <Stat label="Customer due" value={`Rs. ${money(customerDue)}`} basis={`Opening ${money(openingLeft)} left + invoices − payments`} />}
         {c.isCustomer && <Stat label="Credit limit" value={c.creditLimit ? `Rs. ${money(c.creditLimit)}` : "No limit"} basis={c.payTermDays ? `${c.payTermDays}-day terms` : "No terms set"} />}
         {c.isSupplier && <Stat label="Payable to supplier" value={`Rs. ${money(supplierDue)}`} basis="Posted GRNs − payments − supplier credits" />}
         <Stat label="Mobile" value={c.phone ? <a href={`tel:${c.phone}`}>{c.phone}</a> : "—"} basis={c.group?.name} />
@@ -68,7 +71,8 @@ export default async function ContactDetail({ params }: { params: Promise<{ id: 
         <h2>Payments</h2>
         <DataTable rows={payments} rowKey={(p) => p.id} empty="No payments recorded."
           columns={[
-            { label: "Reference", primary: true, render: (p) => p.number },
+            { label: "Reference", primary: true, render: (p) => p.collection ? <RowLink href={`/sales/collections/${p.collection.id}`}>{p.number}</RowLink> : p.number },
+            { label: "For", render: (p) => p.collection ? `Debt payment${p.collection.state !== "POSTED" ? ` (${p.collection.state.toLowerCase()})` : ""}` : p.saleId ? "Sale" : "—" },
             { label: "Date", render: (p) => fmtDateTime(p.paidAt) },
             { label: "Direction", render: (p) => <Badge tone={p.direction === "IN" ? "ok" : "warn"}>{p.direction === "IN" ? "Received" : "Paid out"}</Badge> },
             { label: "Method", render: (p) => p.method.replace("_", " ").toLowerCase() },

@@ -11,6 +11,7 @@ import { attachCheque } from "./payments";
 import { activeRules, ruleFor, perUnitDiscount } from "./discounts";
 import { priceInfo, salePolicy } from "./pricing";
 import { resolvePrice } from "./price-rules";
+import { debtOf } from "./debt";
 
 export const saleInput = z.object({
   idempotencyKey: z.string().min(8).max(80),
@@ -131,8 +132,7 @@ export async function finalizeSale(user: CurrentUser, raw: unknown) {
       if (!input.customerId) throw new SaleError("Select a customer to leave a balance due on credit.");
       const customer = await tx.contact.findUniqueOrThrow({ where: { id: input.customerId } });
       if (customer.creditLimit && !can(user, "sales.credit_override")) {
-        const agg = await tx.sale.aggregate({ where: { customerId: customer.id, stage: "FINAL" }, _sum: { total: true, paid: true, credited: true } });
-        const current = D(customer.openingBalance).plus(D(agg._sum.total)).minus(D(agg._sum.paid)).minus(D(agg._sum.credited));
+        const current = (await debtOf(tx, [customer.id])).get(customer.id) ?? ZERO;
         if (current.plus(due).gt(customer.creditLimit))
           throw new SaleError(`Credit limit ${customer.creditLimit.toFixed(2)} would be exceeded (current due ${current.toFixed(2)}).`);
       }

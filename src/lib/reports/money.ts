@@ -10,7 +10,7 @@ export async function balances(ctx: Ctx) {
     db.account.findMany({ where: { active: true } }),
     db.payment.groupBy({ by: ["accountId", "direction"], where: { accountId: { not: null } }, _sum: { amount: true } }),
     db.sale.aggregate({ where: { stage: "FINAL" }, _sum: { total: true, paid: true, credited: true } }),
-    db.contact.aggregate({ where: { isCustomer: true }, _sum: { openingBalance: true } }),
+    db.contact.aggregate({ where: { isCustomer: true }, _sum: { openingBalance: true, openingPaid: true } }),
     db.goodsReceipt.aggregate({ where: { status: "POSTED" }, _sum: { total: true, paid: true } }),
     db.contact.aggregate({ where: { isSupplier: true, isCustomer: false }, _sum: { openingBalance: true } }),
     db.supplierClaim.aggregate({ where: { status: "SETTLED" }, _sum: { creditAmount: true } }),
@@ -25,7 +25,7 @@ export async function balances(ctx: Ctx) {
   });
   return {
     acct,
-    receivables: D(customers._sum.openingBalance).plus(D(sales._sum.total)).minus(D(sales._sum.paid)).minus(D(sales._sum.credited)),
+    receivables: D(customers._sum.openingBalance).minus(D(customers._sum.openingPaid)).plus(D(sales._sum.total)).minus(D(sales._sum.paid)).minus(D(sales._sum.credited)),
     payables: D(suppliers._sum.openingBalance).plus(D(grns._sum.total)).minus(D(grns._sum.paid)).minus(D(claims._sum.creditAmount)),
     storeCredit: D(credit._sum.amount),
     payroll: sum(slips, (p) => D(p.net).minus(p.paid)),
@@ -95,7 +95,7 @@ export const moneyReports: ReportDef[] = [
         const pays = await db.payment.findMany({ where: { accountId: a.id, paidAt: inPeriod(ctx) }, orderBy: { paidAt: "asc" }, include: { sale: true, receipt: true, expense: true, contact: true } });
         for (const p of pays) {
           bal = p.direction === "IN" ? bal.plus(p.amount) : bal.minus(p.amount);
-          rows.push({ account: a.name, date: p.paidAt, ref: p.number, what: [p.sale?.number, p.receipt?.number, p.expense?.number, p.payslipId && "Salary", p.walletId && "Reload funding", p.settlementId && "Commission", p.reference].filter(Boolean).join(" · ") || methodName(p.method), in: p.direction === "IN" ? p.amount : null, out: p.direction === "OUT" ? p.amount : null, balance: bal });
+          rows.push({ account: a.name, date: p.paidAt, ref: p.number, what: [p.collectionId && "Debt payment", p.sale?.number, p.receipt?.number, p.expense?.number, p.payslipId && "Salary", p.walletId && "Reload funding", p.settlementId && "Commission", p.reference].filter(Boolean).join(" · ") || methodName(p.method), in: p.direction === "IN" ? p.amount : null, out: p.direction === "OUT" ? p.amount : null, balance: bal });
         }
       }
       const unmapped = await db.payment.findMany({ where: { accountId: null, method: { not: "STORE_CREDIT" }, paidAt: inPeriod(ctx) } });
@@ -108,7 +108,7 @@ export const moneyReports: ReportDef[] = [
     basis: "Actual money in and out by payment date and method. Store credit is not money; refunds and bounces are outflows/reversals.",
     async run(ctx) {
       const pays = await db.payment.findMany({ where: { paidAt: inPeriod(ctx), method: { not: "STORE_CREDIT" } }, include: { account: true } });
-      const what = (p: (typeof pays)[number]) => p.saleId ? (p.returnId ? "Customer refunds" : "Sales & customer payments") : p.repairJobId ? "Repair payments" : p.receiptId ? "Supplier payments" : p.expenseId ? "Expenses" : p.payslipId ? "Salaries" : p.walletId ? "Reload wallet funding" : p.settlementId ? "Commission payouts" : p.claimId ? "Supplier refunds" : p.reversesId ? "Cheque reversals" : "Other";
+      const what = (p: (typeof pays)[number]) => p.collectionId ? "Customer debt payments" : p.saleId ? (p.returnId ? "Customer refunds" : "Sales & customer payments") : p.repairJobId ? "Repair payments" : p.receiptId ? "Supplier payments" : p.expenseId ? "Expenses" : p.payslipId ? "Salaries" : p.walletId ? "Reload wallet funding" : p.settlementId ? "Commission payouts" : p.claimId ? "Supplier refunds" : p.reversesId ? "Cheque reversals" : "Other";
       const g = groupSum(pays, (p) => `${what(p)}|${methodName(p.method)}`, { in: (p) => (p.direction === "IN" ? p.amount : 0), out: (p) => (p.direction === "OUT" ? p.amount : 0) });
       const rows: Row[] = [...g.entries()].map(([k, v]) => { const [w, m] = k.split("|"); return { what: w, method: m, in: v.in, out: v.out, net: v.in.minus(v.out) }; }).sort((a, b) => String(a.what).localeCompare(String(b.what)));
       return { columns: [{ key: "what", label: "Flow" }, { key: "method", label: "Method" }, { key: "in", label: "In", kind: "money" }, { key: "out", label: "Out", kind: "money" }, { key: "net", label: "Net", kind: "money" }], rows, totals: totalsOf(rows, ["in", "out", "net"]), notes: ["There are no internal account transfers recorded yet, so nothing is double counted between accounts."] };
@@ -151,6 +151,37 @@ export const moneyReports: ReportDef[] = [
       const diff = dr.minus(cr);
       rows.push({ account: "Unmapped difference — owner's equity, retained result and opening balances not yet reconciled", debit: diff.lt(0) ? diff.neg() : null, credit: diff.gt(0) ? diff : null, _tone: "warn" });
       return { columns: [{ key: "account", label: "Account" }, { key: "debit", label: "Debit", kind: "money" }, { key: "credit", label: "Credit", kind: "money" }], rows, totals: totalsOf(rows, ["debit", "credit"]), notes: ["Spec §16: a formal trial balance needs a mapped chart of accounts and reconciled opening balances (after migration)."] };
+    },
+  },
+  {
+    id: "RP-37", slug: "debt-collections", title: "Customer debt collections", group: "Money & balances", perm: "debt.view",
+    basis: "Receipts for previous debt by paid-on date, one row per invoice / opening balance settled. Money is counted once per receipt (cash to the till's register, card/bank to the chosen account); no sale, stock or revenue is created. Reversed and bounced receipts are listed but not counted as collected.",
+    async run(ctx) {
+      const cs = await db.debtCollection.findMany({
+        where: { paidAt: inPeriod(ctx), locationId: locIn(ctx) },
+        include: { customer: true, account: true, createdBy: true, allocations: { include: { sale: { select: { number: true } } } }, payments: { include: { cheque: true } } },
+        orderBy: { paidAt: "asc" },
+      });
+      const rows: Row[] = [];
+      for (const c of cs) {
+        const live = c.state === "POSTED";
+        const cheque = c.payments.find((p) => p.cheque)?.cheque;
+        const base = { receipt: c.number, date: c.paidAt, customer: c.customer.name, method: methodName(c.method) + (cheque && live && cheque.status !== "CLEARED" ? " (not cleared)" : ""), account: c.account?.name ?? (c.method === "STORE_CREDIT" ? "store credit" : ""), register: c.registerId ? "yes" : "", by: c.createdBy.fullName, state: c.state.toLowerCase(), _href: `/sales/collections/${c.id}`, _tone: live ? (cheque && cheque.status !== "CLEARED" ? "warn" as const : undefined) : "err" as const };
+        const parts = [...c.allocations.map((a) => ({ applied: a.sale?.number ?? "Opening balance", amount: a.amount })), ...(D(c.advance).gt(0) ? [{ applied: "Advance credit", amount: c.advance }] : [])];
+        parts.forEach((x, i) => rows.push({ ...base, applied: x.applied, amount: live ? x.amount : 0, received: i === 0 && live ? c.received : null, debtLeft: i === 0 ? c.debtAfter : null }));
+      }
+      const live = cs.filter((c) => c.state === "POSTED");
+      return {
+        columns: [{ key: "receipt", label: "Receipt" }, { key: "date", label: "Paid on", kind: "datetime" }, { key: "customer", label: "Customer" }, { key: "method", label: "Method" }, { key: "account", label: "Account" }, { key: "register", label: "Till cash" }, { key: "applied", label: "Applied to" }, { key: "amount", label: "Amount", kind: "money" }, { key: "received", label: "Receipt total", kind: "money" }, { key: "debtLeft", label: "Debt left", kind: "money" }, { key: "by", label: "Received by" }, { key: "state", label: "State" }],
+        rows, totals: totalsOf(rows, ["amount", "received"]),
+        summary: [
+          { label: "Money received (excl. store credit)", value: sum(live.filter((c) => c.method !== "STORE_CREDIT"), (c) => c.received), kind: "money" },
+          { label: "of which cash into registers", value: sum(live.filter((c) => c.registerId), (c) => c.received), kind: "money" },
+          { label: "Kept as advance credit", value: sum(live, (c) => c.advance), kind: "money" },
+          { label: "Reversed / bounced receipts", value: cs.length - live.length },
+        ],
+        notes: ["Amount = what each receipt settled; Receipt total = money kept (tendered less change). A receipt's advance credit is part of its total but settles no invoice."],
+      };
     },
   },
   {

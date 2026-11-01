@@ -145,15 +145,15 @@ export const salesReports: ReportDef[] = [
   },
   {
     id: "RP-15", slug: "sell-payments", title: "Sell payments", group: "Profit & sales",
-    basis: "Money actually received from customers, by payment date (sales, repairs, COD). Store credit used is shown but is not money received.",
+    basis: "Money actually received from customers, by payment date (sales, repairs, COD, previous-debt receipts). Store credit used is shown but is not money received.",
     async run(ctx) {
       const pays = await db.payment.findMany({
-        where: { paidAt: inPeriod(ctx), OR: [{ sale: { locationId: locIn(ctx) } }, { repairJob: { locationId: locIn(ctx) } }] },
-        include: { account: true, contact: { include: { group: true } }, sale: true, repairJob: true }, orderBy: { paidAt: "asc" },
+        where: { paidAt: inPeriod(ctx), OR: [{ sale: { locationId: locIn(ctx) } }, { repairJob: { locationId: locIn(ctx) } }, { collection: { locationId: locIn(ctx) } }] },
+        include: { account: true, contact: { include: { group: true } }, sale: true, repairJob: true, collection: { include: { allocations: { include: { sale: { select: { number: true } } } } } } }, orderBy: { paidAt: "asc" },
       });
       const rows: Row[] = pays.map((p) => ({
         ref: p.number, date: p.paidAt, customer: p.contact?.name ?? "Walk-in", group: p.contact?.group?.name ?? "", method: p.method.toLowerCase().replace("_", " "), account: p.account?.name ?? "",
-        for: p.sale?.number ?? p.repairJob?.number ?? "", amount: p.direction === "IN" ? p.amount : D(p.amount).neg(), _href: p.saleId ? `/sales/${p.saleId}` : p.repairJobId ? `/repairs/${p.repairJobId}` : undefined,
+        for: p.sale?.number ?? p.repairJob?.number ?? (p.collection ? `Debt: ${p.collection.allocations.map((a) => a.sale?.number ?? "opening balance").join(", ") || "advance"}` : ""), amount: p.direction === "IN" ? p.amount : D(p.amount).neg(), _href: p.saleId ? `/sales/${p.saleId}` : p.repairJobId ? `/repairs/${p.repairJobId}` : p.collectionId ? `/sales/collections/${p.collectionId}` : undefined,
       }));
       const money = rows.filter((r) => r.method !== "store credit");
       return {
@@ -191,7 +191,7 @@ export const salesReports: ReportDef[] = [
       ]);
       const rows: Row[] = contacts.map((c) => {
         const a = all.find((x) => x.customerId === c.id); const p = period.find((x) => x.customerId === c.id);
-        return { name: c.name, opening: c.openingBalance, sales: p?._sum.total ?? 0, returns: p?._sum.credited ?? 0, due: D(c.openingBalance).plus(D(a?._sum.total)).minus(D(a?._sum.paid)).minus(D(a?._sum.credited)), storeCredit: credit.find((x) => x.contactId === c.id)?._sum.amount ?? 0, _href: `/contacts/${c.id}` };
+        return { name: c.name, opening: D(c.openingBalance).minus(c.openingPaid), sales: p?._sum.total ?? 0, returns: p?._sum.credited ?? 0, due: D(c.openingBalance).minus(c.openingPaid).plus(D(a?._sum.total)).minus(D(a?._sum.paid)).minus(D(a?._sum.credited)), storeCredit: credit.find((x) => x.contactId === c.id)?._sum.amount ?? 0, _href: `/contacts/${c.id}` };
       }).filter((r) => !D(r.due as never).eq(0) || !D(r.sales as never).eq(0) || !D(r.storeCredit as never).eq(0));
       return { columns: [{ key: "name", label: "Customer" }, { key: "opening", label: "Opening", kind: "money" }, { key: "sales", label: "Sales in period", kind: "money" }, { key: "returns", label: "Returns in period", kind: "money" }, { key: "due", label: "Owes us", kind: "money" }, { key: "storeCredit", label: "Store credit held", kind: "money" }], rows, totals: totalsOf(rows, ["opening", "sales", "returns", "due", "storeCredit"]) };
     },

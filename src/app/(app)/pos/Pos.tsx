@@ -8,6 +8,7 @@ import { DevicePicker, deviceLabel } from "@/components/DevicePicker";
 import { completeSale, searchCustomers } from "./actions";
 import { quickAddCustomer } from "../contacts/actions";
 import { saveDraftAction } from "../sales/drafts/actions";
+import { DebtStrip, HistoryDialog, RepaymentDialog, useBalance, type DebtPerms, type RecvAccount } from "./DebtPanel";
 
 // lots: the salesperson's explicit lot choice (one row, or an explicit split); lotOptions: eligible lots here (null = loading).
 type LotPick = { layerId: string; qty: number };
@@ -17,7 +18,7 @@ type CartLine = {
 };
 export type DraftPrefill = { id: string; number: string; lines: { product: ProductHit; qty: number; price: string; discount: string }[] };
 type Pay = { key: string; method: "CASH" | "CARD" | "BANK_TRANSFER" | "CHEQUE" | "STORE_CREDIT" | "OTHER"; amount: string; accountId: string; reference: string };
-type Customer = { id: string; name: string; phone: string | null; storeCredit?: number; pricing?: Policy };
+type Customer = { id: string; name: string; phone: string | null; code?: string | null; phoneMasked?: string; storeCredit?: number; pricing?: Policy };
 type Tier = { id: string; name: string; allowed: boolean };
 const STANDARD: Policy = { tier: null, adjustmentPct: null, groupName: null };
 const needsLot = (l: CartLine) => l.product.available !== null && !l.product.tracked;
@@ -27,6 +28,7 @@ type Props = {
   initialCustomer: Customer | null;
   initialDraft: DraftPrefill | null;
   tiers: Tier[]; canOverrideTier: boolean;
+  locationId: string; debtPerms: DebtPerms; recvAccounts: RecvAccount[];
 };
 
 const n = (v: string | number) => { const x = Number(v); return Number.isFinite(x) ? x : 0; };
@@ -50,7 +52,7 @@ export function Pos(props: Props) {
   const [customer, setCustomer] = useState<Customer | null>(props.initialCustomer);
   // Tier override for this sale: undefined = follow the customer's group policy, null = default price, id = that tier.
   const [override, setOverride] = useState<string | null | undefined>(undefined);
-  const [reprice, setReprice] = useState<{ customer: Customer | null; override: string | null | undefined; rows: { id: string; name: string; from: number; to: number; rule: string; fallback: boolean }[] } | null>(null);
+  const [reprice, setReprice] = useState<{ customer: Customer | null; override: string | null | undefined; clearedTier: string | null; before: number; after: number; rows: { id: string; name: string; from: number; to: number; rule: string; fallback: boolean; discount: number; manual: boolean }[] } | null>(null);
   const [custEditing, setCustEditing] = useState(false);
   const [custQ, setCustQ] = useState("");
   const [custHits, setCustHits] = useState<Customer[]>([]);
@@ -65,6 +67,10 @@ export function Pos(props: Props) {
   const [smsReceipt, setSmsReceipt] = useState(true);
   const [done, setDone] = useState<{ id: string; number: string; change: string } | null>(null);
   const [pending, start] = useTransition();
+  // Previous debt of the selected customer: loaded live, shown apart from the sale, paid in its own dialog.
+  const { state: balance, reload: reloadBalance } = useBalance(customer?.id ?? null, props.debtPerms.view);
+  const [repayOpen, setRepayOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const summaryRef = useRef<HTMLElement>(null);
   const searchSeq = useRef(0);
@@ -83,11 +89,16 @@ export function Pos(props: Props) {
     setCustomer(c); setOverride(o); setReprice(null);
     setCart((cs) => cs.map((l) => { const r = resolvePrice(l.product, next); return { ...l, price: r.price.toFixed(2), listPrice: r.price, rule: r.rule, fallback: r.fallback }; }));
   };
+  // A different customer never inherits the previous customer's manual tier: it is cleared, and the preview says so.
   const requestPricing = (c: Customer | null, o: string | null | undefined) => {
+    const switching = (c?.id ?? null) !== (customer?.id ?? null);
+    const clearedTier = switching && o !== undefined ? (o === null ? "Default price" : props.tiers.find((t) => t.id === o)?.name ?? "manual tier") : null;
+    if (clearedTier) o = undefined;
     const next = policyFor(c, o);
-    const rows = cart.map((l) => { const r = resolvePrice(l.product, next); return { id: l.product.id, name: l.product.name, from: n(l.price), to: r.price, rule: r.rule, fallback: r.fallback }; });
-    if (rows.every((r, i) => r.from === r.to && cart[i].rule === r.rule)) return applyPricing(c, o);
-    setReprice({ customer: c, override: o, rows });
+    const rows = cart.map((l) => { const r = resolvePrice(l.product, next); return { id: l.product.id, name: l.product.name, from: n(l.price), to: r.price, rule: r.rule, fallback: r.fallback, discount: round2(n(l.discount) + offerAmt(l)), manual: n(l.price) !== l.listPrice }; });
+    if (!clearedTier && rows.every((r, i) => r.from === r.to && cart[i].rule === r.rule)) return applyPricing(c, o);
+    const after = round2(cart.reduce((a, l, i) => a + Math.max(round2(rows[i].to * l.qty - offerAmt(l) - n(l.discount)), 0), 0));
+    setReprice({ customer: c, override: o, clearedTier, before: subtotal, after, rows });
   };
 
   // Eligible lots for a line: this location's saleable stock only. One lot is preselected; several need a choice.
@@ -168,10 +179,18 @@ export function Pos(props: Props) {
       if (!fromScan) { clearTimeout(timer.current); searchSeq.current++; setQ(""); }
       return;
     }
+    const scanned = fromScan ? p.scannedLayerId : undefined;
     setCart((c) => {
       const i = c.findIndex((l) => l.product.id === p.id);
-      if (i >= 0) return c.map((l, j) => (j === i ? { ...l, qty: l.qty + 1, lots: l.lots.length === 1 ? [{ ...l.lots[0], qty: l.lots[0].qty + 1 }] : l.lots } : l));
-      return [...c, newLine(p)];
+      if (i < 0) return [...c, scanned ? { ...newLine(p), lots: [{ layerId: scanned, qty: 1 }] } : newLine(p)];
+      return c.map((l, j) => {
+        if (j !== i) return l;
+        // A scanned lot label adds to that exact lot (an explicit split if the line already takes another lot).
+        if (scanned && l.lots.length && !l.lots.some((x) => x.layerId === scanned)) return { ...l, qty: l.qty + 1, lots: [...l.lots, { layerId: scanned, qty: 1 }] };
+        if (scanned && l.lots.length > 1) return { ...l, qty: l.qty + 1, lots: l.lots.map((x) => (x.layerId === scanned ? { ...x, qty: x.qty + 1 } : x)) };
+        if (scanned && !l.lots.length) return { ...l, qty: l.qty + 1, lots: [{ layerId: scanned, qty: l.qty + 1 }] };
+        return { ...l, qty: l.qty + 1, lots: l.lots.length === 1 ? [{ ...l.lots[0], qty: l.lots[0].qty + 1 }] : l.lots };
+      });
     });
     setHits([]); setError(null);
     if (!fromScan) {
@@ -195,7 +214,7 @@ export function Pos(props: Props) {
     // Each scan resolves independently, so back-to-back scans each add their own item.
     const results = await searchProducts(term);
     const t = term.toLowerCase();
-    const exact = results.find((h) => h.device) ?? results.find((h) => h.sku.toLowerCase() === t || h.barcode === term) ?? (results.length === 1 ? results[0] : null);
+    const exact = results.find((h) => h.device) ?? results.find((h) => h.sku.toLowerCase() === t || h.barcode === term) ?? results.find((h) => h.scannedLayerId) ?? (results.length === 1 ? results[0] : null);
     if (exact) add(exact, true);
     else {
       setQ(term);
@@ -250,7 +269,7 @@ export function Pos(props: Props) {
         payments: pays.filter((p) => n(p.amount) > 0).map((p) => ({ method: p.method, amount: p.amount, accountId: p.accountId || null, reference: p.reference || null })),
       });
       if (r.error) setError(r.error);
-      else if (r.id) setDone({ id: r.id, number: r.number!, change: r.change ?? "0.00" });
+      else if (r.id) { setDone({ id: r.id, number: r.number!, change: r.change ?? "0.00" }); reloadBalance(); }
     });
   };
 
@@ -260,6 +279,7 @@ export function Pos(props: Props) {
         <div className="eyebrow">Sale completed</div>
         <h1>{done.number}</h1>
         {n(done.change) > 0 && <div className="totalrow grand"><span>Give change</span><strong>Rs. {fmt(n(done.change))}</strong></div>}
+        {customer && props.debtPerms.view && <div className="totalrow small"><span>{customer.name}&apos;s debt now</span><strong>{balance.status === "ok" ? `Rs. ${fmt(n(balance.ledger.debt))}` : balance.status === "loading" ? "Loading balance…" : "Balance unavailable"}</strong></div>}
         <div className="row" style={{ justifyContent: "center" }}>
           <Link className="btn" href={`/sales/${done.id}?print=1`}>Print receipt</Link>
           <Link className="btn" href={`/sales/${done.id}`}>View sale</Link>
@@ -406,6 +426,11 @@ export function Pos(props: Props) {
                 </span>
               ))}
             </div>
+            <div className="totalrow small"><span>Items subtotal {fmt(reprice.before)} → {fmt(reprice.after)}</span><strong style={{ color: reprice.after > reprice.before ? "var(--err)" : reprice.after < reprice.before ? "var(--ok)" : undefined }}>{reprice.after >= reprice.before ? "+" : "−"}{fmt(Math.abs(round2(reprice.after - reprice.before)))}</strong></div>
+            {reprice.rows.some((r) => r.discount > 0 || r.manual) && (
+              <span className="small" style={{ color: "var(--warn)" }}>Discounts affected: {reprice.rows.filter((r) => r.discount > 0 || r.manual).map((r) => `${r.name}${r.discount > 0 ? ` (discount ${fmt(r.discount)} kept)` : ""}${r.manual ? " (hand price replaced)" : ""}`).join("; ")}.{n(invDisc) > 0 ? ` Invoice discount ${fmt(n(invDisc))} kept.` : ""}</span>
+            )}
+            {reprice.clearedTier && <span className="small" style={{ color: "var(--warn)" }}>The tier chosen by hand for the previous customer ({reprice.clearedTier}) is cleared: prices now follow this customer&apos;s own pricing. Choose a tier again after applying if needed.</span>}
             <span className="small muted">Lots, IMEIs and quantities stay as they are. Prices you changed by hand are replaced.</span>
             <div className="row">
               <button className="btn btn-sm" onClick={() => setReprice(null)}>Cancel</button>
@@ -417,7 +442,10 @@ export function Pos(props: Props) {
         <div className="field">
           <span>Customer</span>
           {customer && !custEditing ? (
-            <div className="row"><strong style={{ color: "var(--ink)", fontWeight: 500 }}>{customer.name}</strong><span className="muted">{customer.phone}</span>{!!customer.storeCredit && <span className="badge badge-ok">Store credit {fmt(customer.storeCredit)}</span>}<div className="spacer" /><button className="btn btn-sm" onClick={() => setCustEditing(true)}>Change</button><button className="btn btn-sm" onClick={() => requestPricing(null, override)}>Walk-in</button></div>
+            <div className="stack" style={{ gap: 8 }}>
+              <div className="row"><strong style={{ color: "var(--ink)", fontWeight: 500 }}>{customer.name}</strong><span className="muted">{customer.phone}</span>{!!customer.storeCredit && !props.debtPerms.view && <span className="badge badge-ok">Store credit {fmt(customer.storeCredit)}</span>}<div className="spacer" /><button className="btn btn-sm" onClick={() => setCustEditing(true)}>Change</button><button className="btn btn-sm" onClick={() => requestPricing(null, override)}>Walk-in</button></div>
+              {props.debtPerms.view && <DebtStrip state={balance} perms={props.debtPerms} onReceive={() => setRepayOpen(true)} onHistory={() => setHistoryOpen(true)} onRetry={reloadBalance} />}
+            </div>
           ) : newCust ? (
             <div className="stack" style={{ gap: 8 }}>
               <input placeholder="Customer name" value={newCust.name} onChange={(e) => setNewCust({ ...newCust, name: e.target.value })} />
@@ -436,10 +464,11 @@ export function Pos(props: Props) {
                 {props.canQuickAdd && <button className="btn" onClick={() => setNewCust({ name: custQ, phone: "" })} aria-label="Add customer">+ New</button>}
               </div>
               {custHits.length > 0 && (
-                <div className="panel" style={{ position: "absolute", left: 0, right: 0, top: "100%", zIndex: 10, padding: 0 }}>
+                <div className="panel" aria-label="Customer matches" style={{ position: "absolute", left: 0, right: 0, top: "100%", zIndex: 10, padding: 0 }}>
+                  {custHits.length > 1 && <div className="small muted" style={{ padding: "6px 10px" }}>{custHits.length} matches — choose the customer</div>}
                   {custHits.map((c) => (
                     <button key={c.id} className="btn-ghost" style={{ width: "100%", justifyContent: "space-between", borderRadius: 0 }} onClick={() => { setCustHits([]); setCustQ(""); setCustEditing(false); requestPricing(c, override); }}>
-                      <span>{c.name}{c.pricing?.tier ? <span className="muted small"> · {c.pricing.tier.name}</span> : null}</span><span className="muted small">{c.phone}</span>
+                      <span>{c.name}{c.pricing?.tier ? <span className="muted small"> · {c.pricing.tier.name}</span> : null}</span><span className="muted small">{c.phoneMasked ?? c.phone} · ID {c.code ?? c.id.slice(-6).toUpperCase()}</span>
                     </button>
                   ))}
                 </div>
@@ -483,7 +512,10 @@ export function Pos(props: Props) {
             <input value={invDisc} onChange={(e) => setInvDisc(e.target.value)} inputMode="decimal" placeholder="0.00" style={{ width: 110, textAlign: "right", minHeight: 36 }} aria-label="Invoice discount" />
           </div>
           <div className="totalrow"><span>Rounding</span><strong>{fmt(rounding)}</strong></div>
-          <div className="totalrow grand"><span>To collect</span><strong>Rs. {fmt(total)}</strong></div>
+          <div className="totalrow grand"><span>Current sale · to collect</span><strong>Rs. {fmt(total)}</strong></div>
+          {customer && balance.status === "ok" && n(balance.ledger.debt) > 0 && (
+            <div className="totalrow small muted"><span>Previous debt (separate, not in this sale)</span><strong>{fmt(n(balance.ledger.debt))}</strong></div>
+          )}
         </div>
 
         <div>
@@ -513,7 +545,8 @@ export function Pos(props: Props) {
           ))}
           <button className="btn btn-sm" onClick={() => setPays((ps) => [...ps, { key: crypto.randomUUID(), method: "CARD", amount: due > 0 ? String(due) : "", accountId: "", reference: "" }])}>+ Split payment</button>
           {change > 0 && <div className="totalrow" style={{ color: "var(--ok)" }}><span>Change to give</span><strong>{fmt(change)}</strong></div>}
-          {due > 0 && cart.length > 0 && <div className="totalrow" style={{ color: "var(--warn)" }}><span>{customer ? "Balance on credit" : "Still to collect"}</span><strong>{fmt(due)}</strong></div>}
+          {due > 0 && cart.length > 0 && <div className="totalrow" style={{ color: "var(--warn)" }}><span>{customer ? "This sale on credit" : "Still to collect"}</span><strong>{fmt(due)}</strong></div>}
+          {due > 0 && cart.length > 0 && customer && balance.status === "ok" && <div className="totalrow small muted"><span>Debt after this sale (previous {fmt(n(balance.ledger.debt))} + this sale)</span><strong>{fmt(round2(n(balance.ledger.debt) + due))}</strong></div>}
         </div>
 
         {customer?.phone && <label className="check small"><input type="checkbox" checked={smsReceipt} onChange={(e) => setSmsReceipt(e.target.checked)} /> SMS receipt to {customer.phone}</label>}
@@ -530,6 +563,11 @@ export function Pos(props: Props) {
         {cart.some((l) => lotIssue(l) && !lotIssue(l)!.startsWith("Loading")) && <p className="small" style={{ margin: 0, color: "var(--err)" }}>Choose the lot for every item before completing.</p>}
         {reprice && <p className="small muted" style={{ margin: 0 }}>Apply or cancel the price changes first.</p>}
       </section>
+      {repayOpen && customer && (
+        <RepaymentDialog customerId={customer.id} perms={props.debtPerms} accounts={props.recvAccounts} locationId={props.locationId}
+          onClose={() => { setRepayOpen(false); reloadBalance(); }} onRecorded={reloadBalance} />
+      )}
+      {historyOpen && customer && <HistoryDialog customerId={customer.id} state={balance} onClose={() => setHistoryOpen(false)} />}
     </div>
   );
 }
