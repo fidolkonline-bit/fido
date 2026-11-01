@@ -163,8 +163,15 @@ payment accounts, first reports, settings.
 Before the first live payroll: set up EPF/ETF, tax and any overtime / holiday-pay rules as pay components and
 check them against approved sample payslips (spec §26).
 
-Server job: `vercel.json` runs `/api/cron` every minute (escalations + SMS) and pins functions to Mumbai (`bom1`).
-Per-minute cron needs a paid Vercel plan; set `CRON_SECRET` in Vercel.
+Server job: `/api/cron` (reminders, task escalation, recurring expenses, subscriptions, SMS retries). Vercel Hobby
+allows only daily cron, so `vercel.json` runs it once a day (00:30 UTC) and Supabase pg_cron calls it every minute:
+
+```bash
+scripts/setup-supabase-cron.sh https://<your-app>.vercel.app   # re-run if the URL or CRON_SECRET changes
+```
+
+Set the same `CRON_SECRET` in Vercel. Open shop devices also run reminders and escalations on their 15-second poll.
+Functions are pinned to Mumbai (`bom1`). Vercel Hobby is for non-commercial use; Pro removes both limits.
 
 Hardware gates before live use (spec §26): print on the real receipt and label printers, scan printed labels
 with the shop's scanners, and check Sinhala/Tamil text on printed output. Test the staff alarm on the actual shop
