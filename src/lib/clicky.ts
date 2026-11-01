@@ -2,7 +2,7 @@
 // Runs in the browser before upload. Nothing is corrected silently: anything doubtful travels with the row as a note.
 import { parseCsv, toCsvText } from "./csv";
 
-export type TargetKind = "PRODUCTS" | "OPENING_STOCK" | "CONTACTS" | "PEOPLE";
+export type TargetKind = "PRODUCTS" | "OPENING_STOCK" | "CONTACTS" | "PEOPLE" | "CATEGORIES";
 export type Converted = { source: string; kind: TargetKind; csv: string; rows: number; notes: string[] };
 export class ClickyError extends Error {}
 
@@ -24,6 +24,7 @@ export function detect(rows: R[]): string | null {
   if (k.includes("total_purchase_due") && k.includes("contact_id")) return "suppliers";
   if (k.includes("commission_details") && k.includes("username")) return "users";
   if (k.includes("reference_no") && k.includes("purchase_status")) return "purchases";
+  if (k.includes("commission_details") && k.includes("category")) return "categories";
   return null;
 }
 
@@ -162,6 +163,21 @@ function users(rows: R[]): Converted {
   return { source: "Clicky users export", kind: "PEOPLE", rows: out.length, notes, csv: toCsvText(out, ["code", "name", "phone", "kind", "note"]) };
 }
 
+// Clicky's category list: one rate per category record. Sub-categories ("--Name") are listed without their parent, and a
+// product's main category is chosen separately, so a rate belongs to the name: it applies to every Fido category so named.
+function categories(rows: R[]): Converted {
+  const notes: string[] = [];
+  const out = rows.filter((r) => tidy(r.category)).map((r) => {
+    const sub = r.category.trim().startsWith("--");
+    const [pool, user, agent] = [...r.commission_details.matchAll(/([\d.]+)%/g)].map((m) => Number(m[1]));
+    return { name: tidy(r.category.replace(/^\s*--/, "")), match: "name", pool_rate: pool ?? "", user_share: user ?? "", agent_share: agent ?? "", note: [sub ? "sub-category in Clicky" : "", tidy(r.description) ? `Clicky note: ${tidy(r.description)}` : ""].filter(Boolean).join("; ") };
+  });
+  const big = out.filter((c) => Number(c.pool_rate) >= 20);
+  if (big.length) notes.push(`High pool rates kept as they are: ${big.map((c) => `${c.name} ${c.pool_rate}%`).join(", ")}.`);
+  notes.push(`${out.length} category rates. Each applies to every Fido category with the same name, at any level. Import products first so their categories exist.`);
+  return { source: "Clicky categories export", kind: "CATEGORIES", rows: out.length, notes, csv: toCsvText(out, ["name", "match", "pool_rate", "user_share", "agent_share", "note"]) };
+}
+
 // Returns null when the file is not a Clicky export (it is then imported as a Fido template).
 export function fromClicky(text: string, want: TargetKind): Converted | null {
   const rows = parseCsv(text);
@@ -170,5 +186,6 @@ export function fromClicky(text: string, want: TargetKind): Converted | null {
   if (src === "purchases") throw new ClickyError("This is Clicky's purchase list: totals per purchase only, without items, lots or costs, so it can't become history. Supplier balances come from the suppliers export. For full history, Clicky's purchase lines (purchase report with products) are needed.");
   if (src === "products") return products(rows, want === "OPENING_STOCK" ? "OPENING_STOCK" : "PRODUCTS");
   if (src === "users") return users(rows);
+  if (src === "categories") return categories(rows);
   return contacts(rows, src === "customers" ? "customer" : "supplier");
 }

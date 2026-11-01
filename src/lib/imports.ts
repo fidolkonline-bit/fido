@@ -39,6 +39,8 @@ export async function dryRun(user: CurrentUser, kind: ImportKind, fileName: stri
     const tierCols = (await tierColumns()).filter((t) => t.key in rows[0]);
     if (tierCols.length) notes = [...notes, `Tier prices from columns: ${tierCols.map((t) => t.name).join(", ")}. Empty = default price; 0 is kept but not used as free until confirmed on the product.`];
     const existingSkus = new Set((await db.product.findMany({ where: { sku: { in: rows.map((r) => r.sku) } }, select: { sku: true } })).map((p) => p.sku));
+    // Excel turns "0005" into "5": catch a new numeric SKU that matches an existing one apart from its leading zeros.
+    const padded = new Map((await db.product.findMany({ where: { sku: { startsWith: "0" } }, select: { sku: true } })).filter((p) => /^\d+$/.test(p.sku)).map((p) => [p.sku.replace(/^0+/, ""), p.sku]));
     const seen = new Set<string>();
     rows.forEach((r, i) => {
       const line = i + 2;
@@ -46,6 +48,7 @@ export async function dryRun(user: CurrentUser, kind: ImportKind, fileName: stri
       if (!r.sku) errs.push("SKU is empty");
       if (!r.name) errs.push("name is empty");
       if (seen.has(r.sku)) errs.push(`SKU ${r.sku} appears twice in this file`);
+      if (!existingSkus.has(r.sku) && padded.has(r.sku)) errs.push(`SKU ${r.sku} looks like ${padded.get(r.sku)} with its leading zeros lost (Excel does this) — fix the SKU column`);
       seen.add(r.sku);
       for (const k of ["sell_price", "min_price", "cost", "alert_qty", ...tierCols.map((t) => t.key)]) {
         const v = num(r[k] ?? "");
@@ -80,6 +83,13 @@ export async function dryRun(user: CurrentUser, kind: ImportKind, fileName: stri
     });
   } else if (kind === "CATEGORIES") {
     if (!("name" in rows[0]) || !("pool_rate" in rows[0])) throw new ImportError("Columns name and pool_rate are required. Download the template.");
+    // match=name (Clicky): the rate applies to every category with that name, whatever its parent.
+    const all = await db.category.findMany({ include: { parent: true, _count: { select: { products: true } } } });
+    const path = (c: (typeof all)[number]) => (c.parent ? `${c.parent.name} > ${c.name}` : c.name);
+    const byName = (n: string) => all.filter((c) => c.name.toLowerCase() === n.toLowerCase());
+    const rated = new Set<string>();
+    const byNameSeen = new Map<string, string>();
+    const fileRate = new Map(rows.filter((r) => r.match === "name").map((r) => [r.name.toLowerCase(), num(r.pool_rate)]));
     const seen = new Set<string>();
     rows.forEach((r, i) => {
       const line = i + 2;
@@ -89,12 +99,33 @@ export async function dryRun(user: CurrentUser, kind: ImportKind, fileName: stri
       if (pool === null || !Number.isFinite(pool) || pool < 0 || pool > 100) errs.push("pool_rate must be 0–100 (percent)");
       if (![u, a].every((x) => Number.isFinite(x) && x >= 0 && x <= 100)) errs.push("shares must be 0–100 (percent of the pool)");
       if (r.legacy_id && seen.has(r.legacy_id)) errs.push(`legacy_id ${r.legacy_id} appears twice`);
+      const rates = `${r.pool_rate}/${r.user_share}/${r.agent_share}`;
+      if (r.match === "name") {
+        const prev = byNameSeen.get(r.name.toLowerCase());
+        if (prev !== undefined && prev !== rates) errs.push(`${r.name} appears twice with different rates`);
+        if (prev === rates) return results.push({ line, status: "SKIP", message: "same name and rates as an earlier row", data: r });
+        byNameSeen.set(r.name.toLowerCase(), rates);
+      }
       if (r.legacy_id) seen.add(r.legacy_id);
       if (errs.length) return results.push({ line, status: "ERROR", message: errs.join("; "), data: r });
       // Do not normalise legacy share totals (e.g. 33% + 66% = 99%): import as-is and flag (spec §9.2).
       const warn = u + a > 0 && Math.abs(u + a - 100) > 0.01 ? `shares total ${u + a}% — imported as-is, review the rule` : undefined;
+      if (r.match === "name") {
+        const targets = byName(r.name);
+        if (!targets.length) return results.push({ line, status: "SKIP", message: "no Fido category has this name (no product uses it)", data: r });
+        targets.forEach((c) => rated.add(c.id));
+        const parents = new Set(targets.map((c) => c.parentId));
+        const mixed = targets.filter((c) => c.parent && fileRate.has(c.parent.name.toLowerCase()) && fileRate.get(c.parent.name.toLowerCase()) !== num(r.pool_rate));
+        const msg = [warn, r.note, parents.size > 1 || targets.length > 1 ? `applies to ${targets.map(path).join(", ")}` : `applies to ${path(targets[0])}`,
+          mixed.length ? "main category has a different rate — products here use this sub-category rate" : ""].filter(Boolean).join("; ");
+        return results.push({ line, status: "OK", action: `rate ${targets.length} categor${targets.length === 1 ? "y" : "ies"}`, message: msg, data: { ...r, ids: targets.map((c) => c.id) } });
+      }
       results.push({ line, status: "OK", action: "create or update", message: warn, data: r });
     });
+    if (rows.some((r) => r.match === "name")) {
+      const left = all.filter((c) => !rated.has(c.id) && c._count.products > 0).sort((x, y) => y._count.products - x._count.products);
+      if (left.length) notes = [...notes, `Still without a rate after this file (${left.length}): ${left.map((c) => `${path(c)} (${c._count.products} products)`).join("; ")}. Their current rate is kept.`];
+    }
   } else if (kind === "PEOPLE") {
     if (!("name" in rows[0])) throw new ImportError("Column name is required. Download the template.");
     const codes = rows.map((r) => r.code).filter(Boolean);
@@ -261,7 +292,11 @@ export async function commitBatch(user: CurrentUser, batchId: string) {
         if (kind !== "NONE") await tx.commissionProfile.create({ data: { personId: person.id, kind, code: d.code || null } });
       }
     } else if (batch.kind === "CATEGORIES") {
-      const rows = ok.map((r) => r.data as Record<string, string>);
+      const byName = ok.map((r) => r.data as Record<string, string> & { ids?: string[] }).filter((d) => d.match === "name");
+      for (const d of byName) {
+        await tx.category.updateMany({ where: { id: { in: d.ids ?? [] } }, data: { poolRate: D(num(d.pool_rate)!).div(100), userShare: D(num(d.user_share ?? "") ?? 0).div(100), agentShare: D(num(d.agent_share ?? "") ?? 0).div(100) } });
+      }
+      const rows = ok.map((r) => r.data as Record<string, string>).filter((d) => d.match !== "name");
       // Parents first so children can link to them.
       for (const pass of [false, true]) {
         for (const d of rows.filter((x) => !!x.parent === pass)) {
