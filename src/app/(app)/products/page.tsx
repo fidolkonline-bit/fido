@@ -4,18 +4,20 @@ import { requirePermission, can } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { D, money, qty } from "@/lib/money";
 import { availability } from "@/lib/stock";
-import { PageHead, DataTable, RowLink, Badge } from "@/components/ui";
+import { PageHead, DataTable, RowLink, Badge, Pager, PAGE_SIZE, pageOf } from "@/components/ui";
 
 export const metadata = { title: "Products" };
 
-export default async function Products({ searchParams }: { searchParams: Promise<{ q?: string; show?: string }> }) {
+export default async function Products({ searchParams }: { searchParams: Promise<{ q?: string; show?: string; page?: string }> }) {
   const user = await requirePermission("products.view");
-  const { q, show } = await searchParams;
+  const { q, show, page: pageParam } = await searchParams;
+  const page = pageOf(pageParam);
   const where: Prisma.ProductWhereInput = {
     active: show === "inactive" ? false : true,
     ...(q ? { OR: [{ name: { contains: q, mode: "insensitive" } }, { sku: { contains: q, mode: "insensitive" } }, { barcode: q }] } : {}),
   };
-  const products = await db.product.findMany({ where, orderBy: { name: "asc" }, take: 200, include: { category: true, brand: true } });
+  const found = await db.product.findMany({ where, orderBy: [{ name: "asc" }, { id: "asc" }], skip: (page - 1) * PAGE_SIZE, take: PAGE_SIZE + 1, include: { category: true, brand: true } });
+  const products = found.slice(0, PAGE_SIZE);
   const stock = user.location ? await availability(user.location.id, products.map((p) => p.id)) : new Map();
   const showCost = can(user, "cost.view");
 
@@ -52,7 +54,8 @@ export default async function Products({ searchParams }: { searchParams: Promise
           { label: "Flags", render: (p) => (p.notForSale ? <Badge tone="warn">Not for sale</Badge> : p.trackDevices ? <Badge>IMEI</Badge> : null) },
         ]}
       />
-      <p className="small muted" style={{ marginTop: 10 }}>Showing {products.length} products{products.length === 200 ? " (first 200 — refine your search)" : ""}. Available = saleable stock at this location.</p>
+      <Pager page={page} hasNext={found.length > PAGE_SIZE} query={{ q, show }} shown={products.length} noun="products" />
+      <p className="small muted">Available = saleable stock at this location.</p>
     </div>
   );
 }

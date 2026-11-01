@@ -3,20 +3,22 @@ import type { Prisma } from "@prisma/client";
 import { requirePermission, can } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { D, money } from "@/lib/money";
-import { PageHead, DataTable, RowLink, Tabs } from "@/components/ui";
+import { PageHead, DataTable, RowLink, Tabs, Pager, PAGE_SIZE, pageOf } from "@/components/ui";
 
 export const metadata = { title: "Contacts" };
 
-export default async function Contacts({ searchParams }: { searchParams: Promise<{ type?: string; q?: string }> }) {
+export default async function Contacts({ searchParams }: { searchParams: Promise<{ type?: string; q?: string; page?: string }> }) {
   const user = await requirePermission("contacts.view");
-  const { type = "customer", q } = await searchParams;
+  const { type = "customer", q, page: pageParam } = await searchParams;
+  const page = pageOf(pageParam);
   const supplier = type === "supplier";
   const where: Prisma.ContactWhereInput = {
     active: true,
     ...(supplier ? { isSupplier: true } : { isCustomer: true }),
-    ...(q ? { OR: [{ name: { contains: q, mode: "insensitive" } }, { phone: { contains: q } }, { company: { contains: q, mode: "insensitive" } }] } : {}),
+    ...(q ? { OR: [{ name: { contains: q, mode: "insensitive" } }, { phone: { contains: q } }, { code: { equals: q, mode: "insensitive" } }, { company: { contains: q, mode: "insensitive" } }] } : {}),
   };
-  const contacts = await db.contact.findMany({ where, orderBy: { name: "asc" }, take: 200, include: { group: true } });
+  const found = await db.contact.findMany({ where, orderBy: [{ name: "asc" }, { id: "asc" }], skip: (page - 1) * PAGE_SIZE, take: PAGE_SIZE + 1, include: { group: true } });
+  const contacts = found.slice(0, PAGE_SIZE);
   const ids = contacts.map((c) => c.id);
 
   // Dues = opening + posted documents − settlements (spec §17.1).
@@ -43,7 +45,7 @@ export default async function Contacts({ searchParams }: { searchParams: Promise
       ]} />
       <form className="toolbar" role="search">
         <input type="hidden" name="type" value={type} />
-        <input name="q" defaultValue={q} placeholder="Search name, phone or company" aria-label="Search contacts" />
+        <input name="q" defaultValue={q} placeholder="Search name, phone or code" aria-label="Search contacts" />
         <button className="btn">Search</button>
       </form>
       <DataTable
@@ -64,6 +66,7 @@ export default async function Contacts({ searchParams }: { searchParams: Promise
           ...(supplier ? [] : [{ label: "Credit limit", num: true, render: (c: (typeof contacts)[number]) => (c.creditLimit ? money(c.creditLimit) : "No limit") }]),
         ]}
       />
+      <Pager page={page} hasNext={found.length > PAGE_SIZE} query={{ type, q }} shown={contacts.length} noun={supplier ? "suppliers" : "customers"} />
     </div>
   );
 }

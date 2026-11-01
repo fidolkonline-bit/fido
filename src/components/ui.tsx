@@ -65,6 +65,23 @@ export function Stat({ label, value, basis }: { label: string; value: ReactNode;
   return <div className="stat">{label}<strong>{value}</strong>{basis}</div>;
 }
 
+// Prev / next paging for long lists; keeps the page light on phones. `query` holds the other filters.
+export function Pager({ page, hasNext, query, shown, noun }: { page: number; hasNext: boolean; query: Record<string, string | undefined>; shown: number; noun: string }) {
+  const href = (p: number) => "?" + new URLSearchParams(Object.entries({ ...query, page: p > 1 ? String(p) : undefined }).filter((e): e is [string, string] => !!e[1])).toString();
+  const from = (page - 1) * PAGE_SIZE + 1;
+  return (
+    <nav className="pager" aria-label="Pages">
+      <span className="small muted">{shown ? `${noun} ${from}–${from + shown - 1}` : `No ${noun}`}</span>
+      <span className="row">
+        {page > 1 && <Link className="btn btn-sm" href={href(page - 1)} rel="prev">Previous</Link>}
+        {hasNext && <Link className="btn btn-sm" href={href(page + 1)} rel="next">Next</Link>}
+      </span>
+    </nav>
+  );
+}
+export const PAGE_SIZE = 50;
+export const pageOf = (v: string | undefined) => Math.max(1, Math.min(10_000, Number.parseInt(v ?? "1", 10) || 1));
+
 export function Tabs({ items }: { items: { label: string; href: string; active: boolean }[] }) {
   return (
     <nav className="tabs">

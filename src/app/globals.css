@@ -316,3 +316,5 @@ table.dt { width: 100%; border-collapse: collapse; font-size: 13px; }
 .checklist li > .badge, .checklist li > input { margin-top: 2px; min-width: 84px; justify-content: center; }
 .checklist li > input { min-width: 0; width: 18px; height: 18px; }
 .checklist .muted { overflow-wrap: anywhere; }
+
+.pager { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 12px; flex-wrap: wrap; }

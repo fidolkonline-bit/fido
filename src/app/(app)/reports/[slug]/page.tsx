@@ -12,7 +12,7 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
 }
 
 const PRESETS: [string, string][] = [["today", "Today"], ["7", "Last 7 days"], ["month", "This month"], ["lastmonth", "Last month"], ["30", "Last 30 days"], ["year", "This year"], ["custom", "Custom dates"]];
-const PAGE = 500;
+const PAGE = 200; // rows on screen; totals cover every row and the CSV has them all
 
 export default async function Report({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<Record<string, string | undefined>> }) {
   const user = await requirePermission("reports.view");

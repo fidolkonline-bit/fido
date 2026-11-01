@@ -28,6 +28,7 @@ export function detect(rows: R[]): string | null {
 }
 
 const RELOAD = /reload|mega ?pay|online trans/i;
+const section = (loc: string | undefined) => `OPEN-${(tidy(loc).replace(/\s*by fido$/i, "") || "SHOP").toUpperCase().replace(/[^A-Z0-9]+/g, "-")}`;
 
 function products(rows: R[], want: "PRODUCTS" | "OPENING_STOCK"): Converted {
   const list = rows.filter((r) => tidy(r.product) && !/add to location/i.test(r.product));
@@ -70,10 +71,12 @@ function products(rows: R[], want: "PRODUCTS" | "OPENING_STOCK"): Converted {
   if (negative.length) notes.push(`${negative.length} products show negative stock in Clicky and are not imported: ${negative.map(({ r }) => `${tidy(r.product)} (${tidy(r.current_stock)})`).join("; ")}. Investigate before cut-over.`);
   const out = items
     .filter(({ r }) => amount(r.current_stock.split(" ")[0]) > 0 && tidy(r.current_stock) !== "--")
-    .map(({ r, sku }) => ({ sku, qty: amount(r.current_stock.split(" ")[0]), unit_cost: amount(r.unit_purchase_price), lot: "CLICKY-OPENING", location: tidy(r.business_location) }));
+    // Clicky's "locations" (Apple By Fido, Trendy By Fido, Wow Gifts By Fido) are sections of one shop, so stock goes to
+    // the importer's location; the section stays visible in the lot code.
+    .map(({ r, sku }) => ({ sku, qty: amount(r.current_stock.split(" ")[0]), unit_cost: amount(r.unit_purchase_price), lot: section(r.business_location) }));
   const value = out.reduce((a, x) => a + x.qty * x.unit_cost, 0);
-  notes.push(`${out.length} products with stock, ${fmt(out.reduce((a, x) => a + x.qty, 0))} units, ${fmt(value)} at Clicky's purchase price. One opening lot per product per location (Clicky's list has no lot detail).`);
-  return { source: "Clicky products export (stock on hand)", kind: "OPENING_STOCK", rows: out.length, notes, csv: toCsvText(out, ["sku", "qty", "unit_cost", "lot", "location"]) };
+  notes.push(`${out.length} products with stock, ${fmt(out.reduce((a, x) => a + x.qty, 0))} units, ${fmt(value)} at Clicky's purchase price. All of it goes to your current location; Clicky's section is kept in the lot code (one opening lot per product — Clicky's list has no lot detail).`);
+  return { source: "Clicky products export (stock on hand)", kind: "OPENING_STOCK", rows: out.length, notes, csv: toCsvText(out, ["sku", "qty", "unit_cost", "lot"]) };
 }
 
 function contacts(rows: R[], type: "customer" | "supplier"): Converted {
