@@ -6,6 +6,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import type { NavGroup } from "@/lib/nav";
 import { switchLocation, logout } from "@/app/(app)/actions";
 import { TaskAlerts } from "./TaskAlerts";
+import { ThemeSwitch, type ThemeChoice } from "./ThemeSwitch";
 
 type Props = {
   nav: NavGroup[];
@@ -13,6 +14,7 @@ type Props = {
   locations: { id: string; name: string }[];
   locationId: string | null;
   registerOpen: boolean;
+  theme: ThemeChoice;
   children: ReactNode;
 };
 
@@ -31,7 +33,7 @@ function activeHref(hrefs: string[], path: string, query: string) {
   return best;
 }
 
-export function Shell({ nav, user, locations, locationId, registerOpen, children }: Props) {
+export function Shell({ nav, user, locations, locationId, registerOpen, theme, children }: Props) {
   const path = usePathname();
   const query = useSearchParams().toString();
   const [open, setOpen] = useState(false);
@@ -64,6 +66,7 @@ export function Shell({ nav, user, locations, locationId, registerOpen, children
         <Link className="btn hide-sm" href="/pos">POS</Link>
         <Link className="btn hide-sm" href="/repairs/new">Repair</Link>
         <Link href="/settings" className="meta hide-sm" style={{ textDecoration: "none" }}><span>{user.name} · {user.role}</span></Link>
+        <ThemeSwitch initial={theme} />
         <form action={logout}><button className="btn" type="submit">Log out</button></form>
       </header>
 

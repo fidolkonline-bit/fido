@@ -325,3 +325,7 @@ table.dt { width: 100%; border-collapse: collapse; font-size: 13px; }
 .lot-row { display: flex; gap: 6px; align-items: center; }
 .lot-row select { flex: 1; min-width: 0; }
 .lot-row input { width: 64px; min-height: 34px; text-align: right; }
+
+/* Theme switch: icon + label on desktop, icon only on phones */
+.theme-switch { gap: 6px; }
+@media (max-width: 760px) { .theme-switch .theme-label { display: none; } .theme-switch { padding: 4px 9px; } }

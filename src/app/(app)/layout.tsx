@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import { cookies } from "next/headers";
 import { requireUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { NAV } from "@/lib/nav";
@@ -12,6 +13,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     ? !!(await db.registerSession.findFirst({ where: { locationId: user.location.id, userId: user.personId, closedAt: null }, select: { id: true } }))
     : false;
 
+  const t = (await cookies()).get("fido_theme")?.value;
+
   return (
     <Suspense>
       <Shell
@@ -20,6 +23,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         locations={user.locations.map((l) => ({ id: l.id, name: l.name }))}
         locationId={user.location?.id ?? null}
         registerOpen={registerOpen}
+        theme={t === "light" || t === "dark" ? t : "system"}
       >
         {children}
       </Shell>
