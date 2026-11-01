@@ -1,0 +1,70 @@
+/* Standalone page setup. The product styles below are preserved from the design. */
+:root { color-scheme: light dark; }
+html, body { margin: 0; }
+body { padding: 16px; background: light-dark(#f3f0e8, #171a18); }
+.cursor-interaction { cursor: pointer; }
+
+#fido-system-design{--fs-paper:light-dark(#f3f0e8,#171a18);--fs-sheet:light-dark(#fffdf8,#222622);--fs-ink:light-dark(#242a26,#ecede6);--fs-muted:light-dark(#62695f,#b5bcae);--fs-line:light-dark(#d7d4ca,#41483f);--fs-nav:light-dark(#242a26,#111512);--fs-navtext:light-dark(#f3f0e8,#f3f0e8);--fs-accent:light-dark(#a83e2b,#d7755f);--fs-accenttext:light-dark(#fffdf8,#171a18);--fs-wash:light-dark(#eee4d8,#36352d);--fs-ok:light-dark(#35634b,#a7c7ab);font:14px/1.45 Arial,Helvetica,sans-serif;color:var(--fs-ink);background:transparent}
+#fido-system-design *{box-sizing:border-box}
+#fido-system-design button,#fido-system-design input,#fido-system-design select{font:inherit;color:inherit}
+#fido-system-design button{background:var(--fs-sheet);border:1px solid var(--fs-line);padding:8px 12px;border-radius:4px;min-height:36px}
+#fido-system-design .fs-primary{background:var(--fs-accent);border-color:var(--fs-accent);color:var(--fs-accenttext)}
+#fido-system-design input,#fido-system-design select{background:var(--fs-sheet);border:1px solid var(--fs-line);border-radius:4px;padding:8px 10px;min-height:36px;min-width:0;max-width:100%}
+#fido-system-design .fs-frame{border:1px solid var(--fs-line);border-radius:6px;overflow:hidden;background:var(--fs-paper)}
+#fido-system-design .fs-top{display:flex;gap:18px;align-items:center;flex-wrap:wrap;background:var(--fs-nav);color:var(--fs-navtext);padding:14px 18px;min-height:55px}
+#fido-system-design .fs-brand{font-weight:700;letter-spacing:2px;font-size:17px;min-width:144px}
+#fido-system-design .fs-top-note{font-size:12px;color:var(--fs-navtext);opacity:.82}
+#fido-system-design .fs-top-actions{display:flex;gap:8px;margin-left:auto;padding-right:80px}
+#fido-system-design .fs-top-actions button{background:transparent;border-color:var(--fs-muted);color:var(--fs-navtext);padding:5px 12px;font-size:12px;min-height:30px}
+#fido-system-design .fs-shell{display:grid;grid-template-columns:174px minmax(0,1fr)}
+#fido-system-design .fs-sidebar{background:var(--fs-nav);color:var(--fs-navtext);padding:8px 8px 14px}
+#fido-system-design .fs-sidebar summary{display:none}
+#fido-system-design .fs-sidebar nav{display:flex;flex-direction:column;gap:1px}
+#fido-system-design .fs-sidebar button{display:block;text-align:left;border:0;border-radius:0;background:transparent;color:var(--fs-navtext);font-size:12px;min-height:30px;padding:6px 11px;position:relative}
+#fido-system-design .fs-sidebar button[aria-pressed=true]{background:var(--fs-sheet);color:var(--fs-ink);border-left:3px solid var(--fs-accent);padding-left:8px}
+#fido-system-design .fs-sidebar .fs-nav-new{margin-top:10px;border-top:1px solid var(--fs-muted);padding-top:11px}
+#fido-system-design .fs-main{min-width:0;padding:23px}
+#fido-system-design .fs-pagehead{display:flex;gap:14px;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;padding-bottom:17px;border-bottom:2px solid var(--fs-ink);margin-bottom:16px}
+#fido-system-design .fs-eyebrow{font-size:11px;letter-spacing:1.1px;text-transform:uppercase;color:var(--fs-muted);margin-bottom:5px}
+#fido-system-design h2{font-size:25px;line-height:1.2;letter-spacing:-.4px;margin:0;font-weight:500}
+#fido-system-design h3{font-size:15px;margin:0 0 12px;font-weight:600}
+#fido-system-design .fs-small{font-size:12px;color:var(--fs-muted)}
+#fido-system-design .fs-selector{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:18px;font-size:12px}
+#fido-system-design .fs-selector select{max-width:100%;font-size:13px}
+#fido-system-design .fs-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+#fido-system-design .fs-toolbar input{flex:1;min-width:130px}
+#fido-system-design .fs-tablewrap{overflow-x:auto;background:var(--fs-sheet);border-bottom:1px solid var(--fs-line)}
+#fido-system-design table{width:100%;border-collapse:collapse;font-size:13px}
+#fido-system-design th{text-align:left;font-size:11px;font-weight:600;color:var(--fs-muted);padding:10px;border-bottom:1px solid var(--fs-ink);white-space:nowrap}
+#fido-system-design td{padding:12px 10px;border-bottom:1px solid var(--fs-line);vertical-align:top}
+#fido-system-design tr:last-child td{border-bottom:0}
+#fido-system-design .fs-number{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+#fido-system-design .fs-rowbutton{padding:0;border:0;background:transparent;color:var(--fs-accent);min-height:24px;font-size:12px;text-decoration:underline;text-underline-offset:3px}
+#fido-system-design .fs-strip{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;padding:0 0 20px;margin-bottom:18px;border-bottom:1px solid var(--fs-line)}
+#fido-system-design .fs-stat{font-size:12px;color:var(--fs-muted)}
+#fido-system-design .fs-stat strong{display:block;font-size:23px;color:var(--fs-ink);font-weight:500;margin:4px 0;font-variant-numeric:tabular-nums}
+#fido-system-design .fs-section{margin-bottom:20px}
+#fido-system-design .fs-pair{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:20px}
+#fido-system-design .fs-paper-panel{background:var(--fs-sheet);padding:16px;border:1px solid var(--fs-line)}
+#fido-system-design .fs-formgrid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+#fido-system-design .fs-field{display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--fs-muted)}
+#fido-system-design .fs-field input,#fido-system-design .fs-field select{width:100%;color:var(--fs-ink)}
+#fido-system-design .fs-formfooter{display:flex;gap:9px;margin-top:18px;justify-content:flex-end;flex-wrap:wrap}
+#fido-system-design .fs-note{border-left:3px solid var(--fs-accent);padding:9px 12px;background:var(--fs-wash);font-size:12px;margin-top:14px}
+#fido-system-design .fs-state{color:var(--fs-ok);font-weight:500}
+#fido-system-design .fs-totalrow{display:flex;justify-content:space-between;gap:15px;padding:10px 0;border-bottom:1px solid var(--fs-line);font-size:13px}
+#fido-system-design .fs-totalrow strong{font-variant-numeric:tabular-nums;font-weight:500}
+#fido-system-design .fs-grand{padding:15px 0;font-size:19px;border-bottom:2px solid var(--fs-ink)}
+#fido-system-design .fs-poslist{display:flex;flex-direction:column;gap:0;border-top:1px solid var(--fs-line);margin-top:12px}
+#fido-system-design .fs-positem{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px 0;border-bottom:1px solid var(--fs-line);font-size:13px}
+#fido-system-design .fs-positem span small{display:block;color:var(--fs-muted);font-size:11px;margin-top:3px}
+#fido-system-design .fs-reportindex{display:grid;grid-template-columns:1fr 1fr;gap:0 20px}
+#fido-system-design .fs-reportindex button{border:0;border-radius:0;border-bottom:1px solid var(--fs-line);text-align:left;background:transparent;padding:11px 2px;font-size:12px}
+#fido-system-design .fs-document{background:var(--fs-sheet);border:1px solid var(--fs-line);padding:20px;max-width:460px;margin:auto;font-size:12px}
+#fido-system-design .fs-document h3{font-size:20px;letter-spacing:2px;margin:0}
+#fido-system-design .fs-document-top{border-bottom:2px solid var(--fs-ink);padding-bottom:12px;margin-bottom:12px;display:flex;justify-content:space-between;gap:12px}
+#fido-system-design #fs-detail{margin-top:18px}
+#fido-system-design [hidden]{display:none!important}
+@media(max-width:740px){#fido-system-design .fs-shell{grid-template-columns:minmax(0,1fr)}#fido-system-design .fs-sidebar{padding:7px 12px}#fido-system-design .fs-sidebar summary{display:list-item;font-size:13px;padding:6px}#fido-system-design .fs-sidebar nav{display:grid;grid-template-columns:1fr 1fr}#fido-system-design .fs-main{padding:16px}#fido-system-design .fs-top-actions{padding-right:0}#fido-system-design .fs-top-note{order:3;width:100%}#fido-system-design .fs-pair{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:470px){#fido-system-design .fs-main{padding:12px}#fido-system-design h2{font-size:22px}#fido-system-design .fs-formgrid,#fido-system-design .fs-reportindex{grid-template-columns:minmax(0,1fr)}#fido-system-design .fs-strip{gap:10px}#fido-system-design .fs-stat strong{font-size:18px}#fido-system-design input,#fido-system-design select{font-size:16px}#fido-system-design .fs-sidebar nav{grid-template-columns:1fr}}
+@media(pointer:coarse){#fido-system-design button,#fido-system-design input,#fido-system-design select{min-height:44px}}

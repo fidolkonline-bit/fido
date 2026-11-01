@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fido Shop — System Design</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+<div id="fido-system-design">
+<div class="fs-frame">
+  <header class="fs-top"><div class="fs-brand">FIDO / SHOP</div><span class="fs-top-note">Whole-system design · fictional data</span><div class="fs-top-actions"><button type="button" data-open="pos" class="cursor-interaction">POS</button><button type="button" data-open="repairs" class="cursor-interaction">Repair</button></div></header>
+  <div class="fs-shell">
+    <aside class="fs-sidebar"><details id="fs-menu" open><summary class="cursor-interaction">Shop navigation</summary><nav id="fs-nav" aria-label="System modules"></nav></details></aside>
+    <main class="fs-main">
+      <div class="fs-pagehead"><div><div id="fs-breadcrumb" class="fs-eyebrow"></div><h2 id="fs-title">Shop desk</h2></div><span class="fs-small">Main shop · Demo operator</span></div>
+      <div class="fs-selector"><label for="fs-screen">Screen</label><select id="fs-screen" class="cursor-interaction"></select></div>
+      <div id="fs-work"></div>
+      <div id="fs-detail" hidden></div>
+      <div id="fs-status" class="fs-note" role="status" hidden></div>
+    </main>
+  </div>
+</div>
+</div>
+</body>
+</html>
