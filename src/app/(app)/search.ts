@@ -3,11 +3,13 @@
 import { db } from "@/lib/db";
 import { requireUser, can } from "@/lib/auth";
 import { availability } from "@/lib/stock";
+import { activeRules, ruleFor, perUnitDiscount } from "@/lib/discounts";
 
 export type DeviceHit = { id: string; imei1: string | null; imei2: string | null; serial: string | null; condition: string };
 export type ProductHit = {
   id: string; sku: string; barcode: string | null; name: string; price: string; minPrice: string | null; cost: string | null;
   available: string | null; lot: string | null; tracked: boolean; device?: DeviceHit;
+  offer: { ruleId: string; name: string; perUnit: string } | null;
 };
 
 const deviceSelect = { id: true, imei1: true, imei2: true, serial: true, condition: true } as const;
@@ -47,6 +49,12 @@ export async function searchProducts(q: string, forSale = true): Promise<Product
   const exact = (p: (typeof products)[number]) => p.id === device?.productId || p.sku.toLowerCase() === term.toLowerCase() || p.barcode === term;
   products.sort((a, b) => Number(exact(b)) - Number(exact(a)));
 
+  return toHits(user, products, device);
+}
+
+type Prod = Awaited<ReturnType<typeof db.product.findMany>>[number];
+async function toHits(user: Awaited<ReturnType<typeof requireUser>>, products: Prod[], device: { id: string; productId: string; imei1: string | null; imei2: string | null; serial: string | null; condition: string } | null): Promise<ProductHit[]> {
+  const loc = user.location?.id;
   const stock = loc ? await availability(loc, products.map((p) => p.id)) : new Map();
   const nextLots = loc
     ? await db.costLayer.findMany({
@@ -56,6 +64,7 @@ export async function searchProducts(q: string, forSale = true): Promise<Product
     : [];
   const lotOf = new Map(nextLots.map((l) => [l.productId, l.lotCode]));
   const showCost = can(user, "cost.view");
+  const rules = await activeRules(loc ?? null);
 
   return products.map((p) => ({
     id: p.id, sku: p.sku, barcode: p.barcode, name: p.name, price: p.sellPrice.toFixed(2), minPrice: p.minSellPrice?.toFixed(2) ?? null,
@@ -63,8 +72,16 @@ export async function searchProducts(q: string, forSale = true): Promise<Product
     available: p.stockManaged ? (stock.get(p.id)?.toString() ?? "0") : null,
     lot: lotOf.get(p.id) ?? null,
     tracked: p.trackDevices,
+    offer: (() => { const r = ruleFor(rules, p); return r ? { ruleId: r.id, name: r.name, perUnit: perUnitDiscount(r, p.sellPrice).toFixed(2) } : null; })(),
     ...(device && device.productId === p.id ? { device: { id: device.id, imei1: device.imei1, imei2: device.imei2, serial: device.serial, condition: device.condition } } : {}),
   }));
+}
+
+// Cart rows for a quote / suspended sale being resumed at the POS (current price, stock and offers).
+export async function productHits(ids: string[]): Promise<ProductHit[]> {
+  const user = await requireUser();
+  if (!can(user, "sales.create")) return [];
+  return toHits(user, await db.product.findMany({ where: { id: { in: ids }, active: true } }), null);
 }
 
 // Devices of one product available at the current location (or in a given state, e.g. HELD for release).

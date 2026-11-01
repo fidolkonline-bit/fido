@@ -6,12 +6,15 @@ import { requirePermission, requireUser, can } from "@/lib/auth";
 import { finalizeSale } from "@/lib/sales";
 import { formError } from "@/lib/forms";
 import { enqueueSms, kickSms } from "@/lib/sms";
+import { closeDraft } from "@/lib/drafts";
 import { money } from "@/lib/money";
 
 export async function completeSale(payload: unknown): Promise<{ id?: string; number?: string; change?: string; error?: string }> {
   const user = await requirePermission("sales.create");
   try {
     const r = await finalizeSale(user, payload);
+    const draftId = (payload as { draftId?: string | null }).draftId;
+    if (draftId) await closeDraft(draftId, "CONVERTED", r.id);
     // Receipt SMS only after the sale has committed; a failed SMS never undoes the sale (spec §18).
     if ((payload as { smsReceipt?: boolean }).smsReceipt) {
       const sale = await db.sale.findUnique({ where: { id: r.id }, include: { customer: true } });

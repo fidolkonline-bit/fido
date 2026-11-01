@@ -5,6 +5,7 @@ import { D, ZERO } from "./money";
 import { nextNumber } from "./numbering";
 import type { CurrentUser } from "./auth";
 import type { Tx } from "./db";
+import { attachCheque } from "./payments";
 
 const paymentSchema = z.object({
   amount: z.coerce.number().positive(),
@@ -38,12 +39,13 @@ async function payOut(tx: Tx, user: CurrentUser, expense: { id: string; contactI
     if (!accountId) accountId = (await tx.account.findFirst({ where: { type: "CASH", active: true, locationId: expense.locationId } }))?.id ?? null;
   }
   if (!accountId) throw new ExpenseError("Choose the account the money is paid from.");
-  await tx.payment.create({
+  const payment = await tx.payment.create({
     data: {
       number: await nextNumber(tx, "PAYMENT_OUT"), direction: "OUT", method: raw.method, amount, accountId, contactId: expense.contactId,
       expenseId: expense.id, registerId, reference: raw.reference, createdById: user.personId,
     },
   });
+  if (raw.method === "CHEQUE") await attachCheque(tx, payment.id, "ISSUED", null, raw.reference);
   return amount;
 }
 

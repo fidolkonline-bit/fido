@@ -3,6 +3,8 @@ import { requirePermission, can } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { D, money, qty, fmtDateTime } from "@/lib/money";
 import { PageHead, DataTable, RowLink, Badge } from "@/components/ui";
+import { PayForm } from "@/components/PayForm";
+import { supplierPaymentForm } from "../../payment-actions";
 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) {
   const row = await db.goodsReceipt.findUnique({ where: { id: (await params).id }, select: { number: true } });
@@ -48,6 +50,13 @@ export default async function ReceiptDetail({ params }: { params: Promise<{ id: 
           <div className="totalrow"><span>Receipt total</span><strong>{money(r.total)}</strong></div>
           <div className="totalrow"><span>Paid to supplier</span><strong>{money(r.paid)}</strong></div>
           <div className="totalrow grand"><span>Due</span><strong>{money(due)}</strong></div>
+        </section>
+      )}
+      {showCost && due.gt(0) && can(user, "purchases.post") && (
+        <section className="panel">
+          <h2>Pay supplier · Rs. {money(due)} due</h2>
+          <PayForm action={supplierPaymentForm} hidden={{ receiptId: r.id }} due={due.toFixed(2)} label="Record payment" methods={["BANK_TRANSFER", "CHEQUE", "CASH", "OTHER"]}
+            accounts={await db.account.findMany({ where: { active: true, type: { in: ["BANK", "CASH"] } }, select: { id: true, name: true } })} />
         </section>
       )}
       {r.payments.length > 0 && (

@@ -7,6 +7,8 @@ import { nextNumber } from "./numbering";
 import { allocateFifo, allocateDevices, storeCreditBalance, type Pick } from "./stock";
 import { can } from "./permissions";
 import type { CurrentUser } from "./auth";
+import { attachCheque } from "./payments";
+import { activeRules, ruleFor, perUnitDiscount } from "./discounts";
 
 export const saleInput = z.object({
   idempotencyKey: z.string().min(8).max(80),
@@ -19,6 +21,7 @@ export const saleInput = z.object({
         unitPrice: z.coerce.number().min(0),
         discount: z.coerce.number().min(0).default(0),
         deviceIds: z.array(z.string()).default([]),
+        discountRuleId: z.string().nullable().default(null),
       }),
     )
     .min(1, "Add at least one item."),
@@ -63,6 +66,7 @@ export async function finalizeSale(user: CurrentUser, raw: unknown) {
       where: { id: { in: input.lines.map((l) => l.productId) }, active: true },
       include: { category: true },
     });
+    const rules = await activeRules(location.id);
     const byId = new Map(products.map((p) => [p.id, p]));
 
     // Price and discount limits are recalculated on the server, never trusted from the client.
@@ -78,15 +82,19 @@ export async function finalizeSale(user: CurrentUser, raw: unknown) {
       const discount = D(l.discount).toDecimalPlaces(2);
       const gross = price.mul(q).toDecimalPlaces(2);
       if (discount.gt(gross)) throw new SaleError(`Discount on ${p.name} is more than the line value.`);
+      // A running offer (discount rule) is allowed on top of the cashier's own limit, but only the rule's amount (S08).
+      const rule = l.discountRuleId ? ruleFor(rules, p) : null;
+      if (l.discountRuleId && rule?.id !== l.discountRuleId) throw new SaleError(`The offer on ${p.name} is no longer running. Remove it and add the item again.`);
+      const ruleAmount = rule ? perUnitDiscount(rule, p.sellPrice).mul(q) : ZERO;
       if (!override) {
-        if (p.minSellPrice && price.lt(p.minSellPrice)) throw new SaleError(`${p.name} cannot be sold below ${p.minSellPrice.toFixed(2)}.`);
+        if (p.minSellPrice && price.lt(p.minSellPrice) && !rule) throw new SaleError(`${p.name} cannot be sold below ${p.minSellPrice.toFixed(2)}.`);
         const listGross = D(p.sellPrice).mul(q);
-        const effectiveDiscount = listGross.minus(gross).plus(discount);
+        const effectiveDiscount = listGross.minus(gross).plus(discount).minus(ruleAmount);
         const maxDiscount = listGross.mul(user.maxDiscountPct).div(100);
         if (effectiveDiscount.gt(maxDiscount.plus(0.005)))
           throw new SaleError(`Discount on ${p.name} is above your limit of ${user.maxDiscountPct.toString()}%.`);
       }
-      return { product: p, qty: q, price, discount, lineTotal: gross.minus(discount), deviceIds: l.deviceIds };
+      return { product: p, qty: q, price, discount, lineTotal: gross.minus(discount), deviceIds: l.deviceIds, ruleId: rule?.id ?? null };
     });
 
     const subtotal = lines.reduce((a, l) => a.plus(l.lineTotal), ZERO);
@@ -175,6 +183,7 @@ export async function finalizeSale(user: CurrentUser, raw: unknown) {
           poolRate: p.category?.poolRate ?? 0,
           userShare: p.category?.userShare ?? 0,
           agentShare: p.category?.agentShare ?? 0,
+          discountRuleId: l.ruleId,
         },
       });
 
@@ -234,13 +243,14 @@ export async function finalizeSale(user: CurrentUser, raw: unknown) {
         });
         accountId = acct?.id ?? null;
       }
-      await tx.payment.create({
+      const payment = await tx.payment.create({
         data: {
           number: await nextNumber(tx, "PAYMENT_IN"),
           direction: "IN", method: p.method, amount, accountId, contactId: input.customerId, saleId: sale.id,
           registerId: p.method === "CASH" ? register.id : null, reference: p.reference, createdById: user.personId,
         },
       });
+      if (p.method === "CHEQUE") await attachCheque(tx, payment.id, "RECEIVED", null, p.reference);
       if (p.method === "STORE_CREDIT")
         await tx.storeCreditEntry.create({ data: { contactId: input.customerId!, amount: amount.neg(), sourceType: "Sale", sourceId: sale.id, reference: number } });
     }

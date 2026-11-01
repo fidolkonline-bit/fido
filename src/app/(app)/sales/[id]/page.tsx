@@ -6,6 +6,10 @@ import { D, money, qty, fmtDateTime } from "@/lib/money";
 import { PageHead, DataTable, RowLink, Badge } from "@/components/ui";
 import { PrintOnLoad } from "./PrintOnLoad";
 import { Barcode } from "@/components/Barcode";
+import { PayForm } from "@/components/PayForm";
+import { ActionForm } from "@/components/ActionForm";
+import { SubmitButton } from "@/components/SubmitButton";
+import { salePaymentForm, newShipmentForm } from "../../payment-actions";
 import { getInvoiceLayout, receiptPaper } from "@/lib/settings";
 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) {
@@ -22,6 +26,7 @@ export default async function SaleDetail({ params, searchParams }: { params: Pro
       lines: { include: { product: { include: { warranty: true } }, allocations: { include: { costLayer: true } }, accruals: { include: { recipient: true } } } },
       payments: { include: { account: true }, orderBy: { paidAt: "asc" } },
       returns: { orderBy: { createdAt: "asc" } },
+      shipments: { orderBy: { createdAt: "asc" } },
     },
   });
   if (!sale) notFound();
@@ -89,6 +94,34 @@ export default async function SaleDetail({ params, searchParams }: { params: Pro
       </div>
 
       <div className="no-print stack">
+        {due.gt(0) && can(user, "sales.create") && (
+          <section className="panel">
+            <h2>Receive payment · Rs. {money(due)} due</h2>
+            <PayForm action={salePaymentForm} hidden={{ saleId: sale.id }} due={due.toFixed(2)} label="Receive payment"
+              accounts={await db.account.findMany({ where: { active: true, type: { in: ["BANK", "CARD"] } }, select: { id: true, name: true } })} />
+          </section>
+        )}
+        {(sale.shipments.length > 0 || can(user, "sales.create")) && (
+          <section className="panel stack">
+            <h2 style={{ margin: 0 }}>Delivery</h2>
+            {sale.shipments.map((sh) => <div key={sh.id} className="totalrow small"><span>{sh.address}{sh.carrier ? ` · ${sh.carrier}` : ""}{sh.trackingRef ? ` ${sh.trackingRef}` : ""}{D(sh.codAmount).gt(0) ? ` · COD ${money(sh.codRemitted)}/${money(sh.codAmount)}` : ""}</span><Badge tone={sh.status === "DELIVERED" ? "ok" : "warn"}>{sh.status.toLowerCase()}</Badge></div>)}
+            {can(user, "sales.create") && (
+              <details><summary className="small" style={{ cursor: "pointer" }}>Ship this sale</summary>
+                <ActionForm action={newShipmentForm} style={{ marginTop: 10 }}>
+                  <input type="hidden" name="saleId" value={sale.id} />
+                  <div className="grid3">
+                    <label className="field" style={{ gridColumn: "span 2" }}><span>Delivery address</span><input name="address" required defaultValue={sale.customer?.address ?? ""} /></label>
+                    <label className="field"><span>Receiver mobile</span><input name="contactPhone" defaultValue={sale.customer?.phone ?? ""} type="tel" /></label>
+                    <label className="field"><span>Courier</span><input name="carrier" placeholder="Domex / Pronto / bus" /></label>
+                    <label className="field"><span>Tracking no.</span><input name="trackingRef" /></label>
+                    <label className="field"><span>Cash on delivery (Rs.)</span><input name="codAmount" defaultValue={due.gt(0) ? due.toFixed(2) : "0"} inputMode="decimal" /></label>
+                  </div>
+                  <div><SubmitButton className="btn">Create shipment</SubmitButton></div>
+                </ActionForm>
+              </details>
+            )}
+          </section>
+        )}
         {(sale.commissionMode !== "NONE" || showCost) && (
           <section className="grid2">
             {showCost && (

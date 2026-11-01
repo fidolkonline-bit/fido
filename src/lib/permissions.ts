@@ -40,6 +40,7 @@ export const PERMISSIONS = {
   "leave.approve": "Approve or reject leave",
   "attendance.manage": "Correct clock-in/out records",
   "commissions.manage": "Approve and pay sales commission",
+  "essentials.manage": "Publish memos, knowledge articles, documents and team reminders",
 } as const;
 
 export type Permission = keyof typeof PERMISSIONS;
@@ -58,7 +59,7 @@ export const DEFAULT_ROLES: { name: string; description: string; permissions: Pe
       "sales.credit_override", "register.operate", "register.review", "accounts.view", "reports.view",
       "returns.create", "stock.adjust", "stock.transfer", "expenses.view", "expenses.manage", "purchases.claims", "imports.run",
       "repairs.view", "repairs.manage", "repairs.credentials", "reloads.request", "reloads.process", "reloads.wallets", "tasks.manage",
-      "hr.view", "leave.approve", "attendance.manage",
+      "hr.view", "leave.approve", "attendance.manage", "essentials.manage",
     ],
   },
   {

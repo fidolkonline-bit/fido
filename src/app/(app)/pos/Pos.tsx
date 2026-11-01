@@ -6,14 +6,17 @@ import { searchProducts, type ProductHit, type DeviceHit } from "../search";
 import { DevicePicker, deviceLabel } from "@/components/DevicePicker";
 import { completeSale, searchCustomers } from "./actions";
 import { quickAddCustomer } from "../contacts/actions";
+import { saveDraftAction } from "../sales/drafts/actions";
 
 type CartLine = { product: ProductHit; qty: number; price: string; discount: string; devices: DeviceHit[] };
+export type DraftPrefill = { id: string; number: string; lines: { product: ProductHit; qty: number; price: string; discount: string }[] };
 type Pay = { key: string; method: "CASH" | "CARD" | "BANK_TRANSFER" | "CHEQUE" | "STORE_CREDIT" | "OTHER"; amount: string; accountId: string; reference: string };
 type Customer = { id: string; name: string; phone: string | null; storeCredit?: number };
 type Props = {
   locationName: string; rounding: number; maxDiscountPct: number; canQuickAdd: boolean; selfId: string;
   salespeople: { id: string; name: string }[]; agents: { id: string; name: string }[]; accounts: { id: string; name: string; type: string }[];
   initialCustomer: Customer | null;
+  initialDraft: DraftPrefill | null;
 };
 
 const n = (v: string | number) => { const x = Number(v); return Number.isFinite(x) ? x : 0; };
@@ -27,7 +30,9 @@ export function Pos(props: Props) {
   const [idem, setIdem] = useState(() => crypto.randomUUID());
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<ProductHit[]>([]);
-  const [cart, setCart] = useState<CartLine[]>([]);
+  const [cart, setCart] = useState<CartLine[]>(() => (props.initialDraft?.lines ?? []).map((l) => ({ ...l, devices: [] })));
+  const [draftId, setDraftId] = useState<string | null>(props.initialDraft?.id ?? null);
+  const [saved, setSaved] = useState<{ id: string; number: string; kind: string } | null>(null);
   const [customer, setCustomer] = useState<Customer | null>(props.initialCustomer);
   const [custQ, setCustQ] = useState("");
   const [custHits, setCustHits] = useState<Customer[]>([]);
@@ -50,7 +55,9 @@ export function Pos(props: Props) {
 
   useEffect(() => { if (window.matchMedia("(pointer: fine)").matches) searchRef.current?.focus(); }, [done]);
 
-  const lineTotal = (l: CartLine) => Math.max(round2(n(l.price) * l.qty - n(l.discount)), 0);
+  // A running offer is per unit, so it follows the quantity; the manual discount is on top of it.
+  const offerAmt = (l: CartLine) => (l.product.offer ? round2(n(l.product.offer.perUnit) * l.qty) : 0);
+  const lineTotal = (l: CartLine) => Math.max(round2(n(l.price) * l.qty - offerAmt(l) - n(l.discount)), 0);
   const subtotal = useMemo(() => round2(cart.reduce((a, l) => a + lineTotal(l), 0)), [cart]);
   const beforeRound = Math.max(round2(subtotal - n(invDisc)), 0);
   const total = props.rounding > 0 ? round2(Math.round(beforeRound / props.rounding) * props.rounding) : beforeRound;
@@ -141,7 +148,21 @@ export function Pos(props: Props) {
   const reset = () => {
     setCart([]); setPicker(null); setCustomer(null); setCustQ(""); setMode("NONE"); setAgentId(""); setInvDisc("");
     setPays([{ key: "p0", method: "CASH", amount: "", accountId: "", reference: "" }]);
-    setError(null); setDone(null); setIdem(crypto.randomUUID());
+    setError(null); setDone(null); setIdem(crypto.randomUUID()); setDraftId(null); setSaved(null);
+  };
+
+  // Park the cart (or give the customer a priced quote). Nothing is posted: no number on the invoice, no stock, no money.
+  const saveAs = (kind: "SUSPENDED" | "QUOTE") => {
+    setError(null);
+    start(async () => {
+      const r = await saveDraftAction({
+        kind, customerId: customer?.id ?? null, notes: null,
+        lines: cart.map((l) => ({ productId: l.product.id, sku: l.product.sku, name: l.product.name, qty: l.qty, unitPrice: n(l.price), discount: round2(n(l.discount) + offerAmt(l)) })),
+      });
+      if (r.error) return setError(r.error);
+      reset();
+      setSaved({ id: r.id!, number: r.number!, kind });
+    });
   };
 
   const submit = () => {
@@ -150,7 +171,8 @@ export function Pos(props: Props) {
       const r = await completeSale({
         idempotencyKey: idem,
         customerId: customer?.id ?? null,
-        lines: cart.map((l) => ({ productId: l.product.id, qty: l.qty, unitPrice: l.price, discount: n(l.discount), deviceIds: l.devices.map((d) => d.id) })),
+        lines: cart.map((l) => ({ productId: l.product.id, qty: l.qty, unitPrice: l.price, discount: round2(n(l.discount) + offerAmt(l)), deviceIds: l.devices.map((d) => d.id), discountRuleId: l.product.offer?.ruleId ?? null })),
+        draftId,
         invoiceDiscount: n(invDisc),
         commissionMode: mode,
         salespersonId: mode === "USER" || mode === "DUAL" ? salespersonId || null : null,
@@ -200,6 +222,8 @@ export function Pos(props: Props) {
           </div>
         )}
 
+        {saved && <p className="note note-ok">{saved.kind === "QUOTE" ? "Quote" : "Sale parked as"} {saved.number}. <Link href={`/sales/drafts/${saved.id}`}>{saved.kind === "QUOTE" ? "Print quote" : "View"}</Link></p>}
+        {draftId && props.initialDraft && <p className="note">Resuming {props.initialDraft.number} — prices and stock are as of now.</p>}
         {picker && (
           <DevicePicker
             productId={picker.id}
@@ -219,7 +243,7 @@ export function Pos(props: Props) {
               return (
                 <div className="cart-line" key={l.product.id}>
                   <div className="c-name">
-                    <span><strong style={{ fontWeight: 500 }}>{l.product.name}</strong><br /><span className="small muted">{l.product.sku}{over && !l.product.tracked && <span style={{ color: "var(--err)" }}> · only {n(l.product.available!)} available</span>}</span>
+                    <span><strong style={{ fontWeight: 500 }}>{l.product.name}</strong><br />{l.product.offer && <span className="small" style={{ color: "var(--ok)" }}>Offer: {l.product.offer.name} −{fmt(offerAmt(l))}<br /></span>}<span className="small muted">{l.product.sku}{over && !l.product.tracked && <span style={{ color: "var(--err)" }}> · only {n(l.product.available!)} available</span>}</span>
                       {l.devices.map((d) => (
                         <span key={d.id} className="small" style={{ display: "flex", gap: 6, alignItems: "center", fontVariantNumeric: "tabular-nums" }}>
                           IMEI {deviceLabel(d)}
@@ -359,6 +383,8 @@ export function Pos(props: Props) {
         {error && <p className="note note-err" role="alert">{error}</p>}
         <div className="row">
           <button className="btn" onClick={reset} disabled={pending || cart.length === 0}>Clear</button>
+          <button className="btn" disabled={pending || cart.length === 0 || cart.some((l) => l.product.tracked)} title="Park this sale and serve the next customer" onClick={() => saveAs("SUSPENDED")}>Suspend</button>
+          <button className="btn" disabled={pending || cart.length === 0} onClick={() => saveAs("QUOTE")}>Quote</button>
           <button className="btn btn-primary" style={{ flex: 1 }} onClick={submit} disabled={pending || cart.length === 0 || (due > 0 && !customer)}>
             {pending ? "Completing…" : due > 0 && customer ? `Complete · ${fmt(due)} on credit` : "Complete sale"}
           </button>

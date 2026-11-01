@@ -109,6 +109,17 @@ payment accounts, first reports, settings.
   with reasons, approval locks payslips, part/full payments, printable payslips (own payslip only for staff).
 - Commission payout — approve, then pay directly or via payroll; each commission line is settled exactly once.
 
+**Phase D2 (complete):**
+- Later payments on credit sales and supplier GRNs; cheque register (deposit / clear / bounce / cancel) — a
+  bounce reverses the payment once and puts the debt back on the original sale, bill, expense or payslip.
+- Quotes and suspended sales (no stock, no money) resumed at the POS; subscriptions create one draft invoice per
+  period; recurring expenses create one due expense per occurrence.
+- Discount rules (one best offer, never stacked; allowed beyond the cashier's own limit only for the offer amount).
+- Shipments with COD — delivered is not paid until the remittance is recorded.
+- Sales targets (flat / progressive bands) paid once through payroll, separate from commission.
+- Essentials: noticeboard, reminders that ring as tasks, private staff messages, knowledge base with revisions,
+  documents (≤ 4 MB, role-restricted downloads).
+
 Before the first live payroll: set up EPF/ETF, tax and any overtime / holiday-pay rules as pay components and
 check them against approved sample payslips (spec §26).
 

@@ -1,6 +1,7 @@
 import "server-only";
 import { db, type Tx } from "./db";
 import { enqueueSms, kickSms } from "./sms";
+import { fireReminders } from "./essentials";
 import type { CurrentUser } from "./auth";
 
 // Shared durable task foundation for bus parcels and reloads (spec §13). The server acknowledgement is authoritative.
@@ -61,6 +62,8 @@ const hrefOf = (t: { id: string; reloadRequestId: string | null; parcelId: strin
 
 // What should ring on this user's device right now.
 export async function alertsFor(user: CurrentUser): Promise<Alert[]> {
+  // Devices poll every 15 s, so reminders and escalations also run when the server cron is unavailable.
+  await fireReminders();
   await escalateOverdue();
   const soon = new Date(Date.now() + 15 * 60_000);
   const locationIds = user.locations.map((l) => l.id);

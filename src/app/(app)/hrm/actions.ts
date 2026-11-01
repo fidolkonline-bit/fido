@@ -200,3 +200,32 @@ export async function payCommissionForm(_: Res, f: FormData): Promise<Res> {
   const user = await requirePermission("commissions.manage");
   return wrap(["/hrm/commissions"], () => P.payCommissionDirect(user, String(f.get("recipientId")), { method: String(f.get("method")), accountId: str(f, "accountId"), reference: str(f, "reference") }), "Commission paid.");
 }
+
+// ── Sales targets (§9.3) ──
+export async function newTargetForm(_: Res, f: FormData): Promise<Res> {
+  await requirePermission("hr.payroll");
+  return wrap(["/hrm/targets"], async () => {
+    const T = await import("@/lib/targets");
+    const bands = [0, 1, 2, 3].flatMap((i) => {
+      const from = num(f, `from${i}`), pct = num(f, `pct${i}`);
+      return from == null || pct == null ? [] : [{ from, to: num(f, `to${i}`), percent: pct }];
+    });
+    if (!bands.length) throw new Error("Add at least one band.");
+    const start = str(f, "periodStart"), end = str(f, "periodEnd");
+    if (!start || !end || end < start) throw new Error("Choose a valid period.");
+    await db.salesTarget.create({
+      data: { personId: String(f.get("personId")), periodStart: H.dateOnly(start), periodEnd: H.dateOnly(end), bands: T.validateBands(bands), mode: str(f, "mode") ?? "FLAT" },
+    });
+  }, "Target saved.");
+}
+
+export async function approveTargetForm(f: FormData) {
+  const user = await requirePermission("hr.payroll");
+  const T = await import("@/lib/targets");
+  const t = await db.salesTarget.findUniqueOrThrow({ where: { id: String(f.get("id")) } });
+  if (t.payslipId) throw new Error("Already paid in payroll.");
+  if (H.dateOnlyYmd(t.periodEnd) >= H.todayYmd()) throw new Error("Approve after the target period has ended.");
+  const r = await T.targetResult(t);
+  await db.salesTarget.update({ where: { id: t.id }, data: { approvedAt: new Date(), snapshot: { achieved: r.value.toFixed(2), earning: r.earning.toFixed(2), by: user.name } } });
+  revalidatePath("/hrm/targets");
+}

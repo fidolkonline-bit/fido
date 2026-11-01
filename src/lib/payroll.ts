@@ -5,8 +5,9 @@ import { D, ZERO } from "./money";
 import { nextNumber } from "./numbering";
 import { attendance, dateOnly, dateOnlyYmd, salaryOn, HrError } from "./hr";
 import type { CurrentUser } from "./auth";
+import { attachCheque } from "./payments";
 
-export type PayLine = { kind: "EARNING" | "DEDUCTION"; label: string; amount: string; source: "COMPONENT" | "COMMISSION" | "LEAVE" | "MANUAL"; note?: string };
+export type PayLine = { kind: "EARNING" | "DEDUCTION"; label: string; amount: string; source: "COMPONENT" | "COMMISSION" | "LEAVE" | "MANUAL" | "TARGET"; note?: string; refIds?: string[] };
 
 const r2 = (v: Prisma.Decimal) => v.toDecimalPlaces(2);
 
@@ -102,6 +103,13 @@ async function computeSlip(tx: Tx, employeeId: string, start: string, end: strin
 
   // Rest-day / holiday work is listed for the reviewer; add a manual earning if the shop pays extra for it.
   if (offDays > 0) lines.push({ kind: "EARNING", label: `Worked on rest days / holidays: ${offDays} (review — not paid automatically)`, amount: "0.00", source: "LEAVE" });
+  // Approved sales-target bonuses for periods ending in this payroll, not yet paid (§9.3); separate from commission.
+  const targets = await tx.salesTarget.findMany({ where: { personId: emp.personId, approvedAt: { not: null }, payslipId: null, periodEnd: { lte: dateOnly(end) } } });
+  for (const t of targets) {
+    const snap = t.snapshot as { earning: string } | null;
+    if (snap && D(snap.earning).gt(0)) lines.push({ kind: "EARNING", label: "Sales target bonus", amount: D(snap.earning).toFixed(2), source: "TARGET", refIds: [t.id] });
+  }
+
   lines.push(...keepManual);
   const earnings = lines.filter((l) => l.kind === "EARNING").reduce((a, l) => a.plus(l.amount), ZERO);
   const deductions = lines.filter((l) => l.kind === "DEDUCTION" && l.source !== "LEAVE").reduce((a, l) => a.plus(l.amount), ZERO);
@@ -178,6 +186,12 @@ export async function approveRun(user: CurrentUser, runId: string) {
       const s = await tx.commissionSettlement.create({ data: { recipientId: p.employee.personId, method: "PAYROLL", amount, payslipId: p.id, createdById: user.personId } });
       await tx.commissionAccrual.updateMany({ where: { id: { in: p.commissionIds } }, data: { settlementId: s.id, state: "SETTLED" } });
     }
+    for (const p of run.payslips) {
+      const ids = (p.lines as PayLine[]).filter((l) => l.source === "TARGET").flatMap((l) => l.refIds ?? []);
+      if (!ids.length) continue;
+      const claimed = await tx.salesTarget.updateMany({ where: { id: { in: ids }, payslipId: null }, data: { payslipId: p.id } });
+      if (claimed.count !== ids.length) throw new HrError("A sales target bonus was paid in another payroll. Recalculate.");
+    }
     await tx.payrollRun.update({ where: { id: runId }, data: { status: "APPROVED", approvedById: user.personId, approvedAt: new Date() } });
     await tx.auditEvent.create({ data: { actorId: user.personId, action: "PAYROLL_APPROVED", subjectType: "PayrollRun", subjectId: runId } });
   });
@@ -195,6 +209,7 @@ export async function reopenRun(user: CurrentUser, runId: string) {
       await tx.commissionAccrual.updateMany({ where: { settlementId: s.id }, data: { settlementId: null, state: "ACCRUED" } });
       await tx.commissionSettlement.delete({ where: { id: s.id } });
     }
+    await tx.salesTarget.updateMany({ where: { payslipId: { in: run.payslips.map((p) => p.id) } }, data: { payslipId: null } });
     await tx.payrollRun.update({ where: { id: runId }, data: { status: "DRAFT", approvedById: null, approvedAt: null } });
     await tx.auditEvent.create({ data: { actorId: user.personId, action: "PAYROLL_REOPENED", subjectType: "PayrollRun", subjectId: runId } });
   });
@@ -216,9 +231,10 @@ export async function payPayslip(user: CurrentUser, payslipId: string, raw: { am
     }
     if (!accountId) throw new HrError("Choose the account salary is paid from.");
     // Paying a payslip settles the approved payable; it is not a second expense (§14.5).
-    await tx.payment.create({
+    const payment = await tx.payment.create({
       data: { number: await nextNumber(tx, "PAYMENT_OUT"), direction: "OUT", method: raw.method, amount, accountId, registerId, payslipId, contactId: null, reference: raw.reference, createdById: user.personId },
     });
+    if (raw.method === "CHEQUE") await attachCheque(tx, payment.id, "ISSUED", null, raw.reference);
     await tx.payslip.update({ where: { id: payslipId }, data: { paid: { increment: amount } } });
     const slips = await tx.payslip.findMany({ where: { runId: p.runId } });
     const allPaid = slips.every((s) => D(s.paid).gte(s.net));

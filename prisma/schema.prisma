@@ -120,6 +120,14 @@ model Person {
   clockCorrections      ClockEvent[]           @relation("ClockCorrector")
   payrollRunsCreated    PayrollRun[]
   commissionSettlements CommissionSettlement[] @relation("SettlementRecipient")
+  drafts                SaleDraft[]
+  memos                 Memo[]
+  reminders             Reminder[]
+  articles              KnowledgeArticle[]
+  documents             DocumentFile[]
+  messagesSent          StaffMessage[]
+  threadMembers         ThreadMember[]
+  targets               SalesTarget[]
 }
 
 model LoginAccount {
@@ -221,6 +229,9 @@ model Contact {
 
   repairs RepairJob[]
   reloads ReloadRequest[]
+
+  drafts        SaleDraft[]
+  subscriptions Subscription[]
 
   @@index([name])
   @@index([phone])
@@ -570,34 +581,37 @@ model Sale {
 
   returns SaleReturn[]
 
+  shipments Shipment[]
+
   @@index([soldAt])
   @@index([customerId])
 }
 
 model SaleLine {
-  id           String              @id @default(cuid())
-  saleId       String
-  sale         Sale                @relation(fields: [saleId], references: [id])
-  productId    String
-  product      Product             @relation(fields: [productId], references: [id])
-  nameSnapshot String
+  id             String              @id @default(cuid())
+  saleId         String
+  sale           Sale                @relation(fields: [saleId], references: [id])
+  productId      String
+  product        Product             @relation(fields: [productId], references: [id])
+  nameSnapshot   String
   // IMEI/serial printed on the invoice; kept even after a device is returned.
-  deviceLabels String[]            @default([])
-  qty          Decimal             @db.Decimal(14, 4)
-  unitPrice    Decimal             @db.Decimal(14, 2)
-  discount     Decimal             @default(0) @db.Decimal(14, 2)
-  lineTotal    Decimal             @db.Decimal(14, 2)
-  costTotal    Decimal             @default(0) @db.Decimal(14, 4)
+  deviceLabels   String[]            @default([])
+  qty            Decimal             @db.Decimal(14, 4)
+  unitPrice      Decimal             @db.Decimal(14, 2)
+  discount       Decimal             @default(0) @db.Decimal(14, 2)
+  lineTotal      Decimal             @db.Decimal(14, 2)
+  costTotal      Decimal             @default(0) @db.Decimal(14, 4)
   // Commission snapshot at time of sale (§9.1)
-  categoryId   String?
-  poolRate     Decimal             @default(0) @db.Decimal(9, 6)
-  userShare    Decimal             @default(0) @db.Decimal(9, 6)
-  agentShare   Decimal             @default(0) @db.Decimal(9, 6)
-  allocations  CostAllocation[]
-  accruals     CommissionAccrual[]
-  returnedQty  Decimal             @default(0) @db.Decimal(14, 4)
-  returnLines  SaleReturnLine[]
-  devices      DeviceIdentity[]
+  categoryId     String?
+  poolRate       Decimal             @default(0) @db.Decimal(9, 6)
+  userShare      Decimal             @default(0) @db.Decimal(9, 6)
+  agentShare     Decimal             @default(0) @db.Decimal(9, 6)
+  allocations    CostAllocation[]
+  accruals       CommissionAccrual[]
+  returnedQty    Decimal             @default(0) @db.Decimal(14, 4)
+  returnLines    SaleReturnLine[]
+  devices        DeviceIdentity[]
+  discountRuleId String?
 }
 
 model CostAllocation {
@@ -1203,6 +1217,8 @@ model Payslip {
   payments        Payment[]
   settlement      CommissionSettlement?
 
+  targets SalesTarget[]
+
   @@unique([employeeId, periodStart, revision])
 }
 
@@ -1218,6 +1234,226 @@ model CommissionSettlement {
   createdAt   DateTime            @default(now())
   accruals    CommissionAccrual[]
   payments    Payment[]
+}
+
+// ───────────── Cheques (§16) ─────────────
+
+model Cheque {
+  id          String    @id @default(cuid())
+  paymentId   String    @unique
+  payment     Payment   @relation(fields: [paymentId], references: [id])
+  direction   String // RECEIVED, ISSUED
+  number      String
+  bank        String?
+  realizeDate DateTime  @db.Date
+  status      String    @default("PENDING") // PENDING, DEPOSITED, CLEARED, BOUNCED, CANCELLED
+  statusAt    DateTime?
+  note        String?
+  createdAt   DateTime  @default(now())
+
+  @@index([status, realizeDate])
+}
+
+// ───────────── Quotes, suspended sales, subscriptions (S05) ─────────────
+
+// Drafts never move stock or money; converting loads them into the POS, which posts once.
+model SaleDraft {
+  id              String        @id @default(cuid())
+  number          String        @unique
+  kind            String // QUOTE, SUSPENDED, SUBSCRIPTION
+  locationId      String
+  customerId      String?
+  customer        Contact?      @relation(fields: [customerId], references: [id])
+  lines           Json // [{ productId, sku, name, qty, unitPrice, discount }]
+  total           Decimal       @db.Decimal(14, 2)
+  notes           String?
+  validUntil      DateTime?     @db.Date
+  status          String        @default("OPEN") // OPEN, CONVERTED, CANCELLED, EXPIRED
+  convertedSaleId String?
+  subscriptionId  String?
+  subscription    Subscription? @relation(fields: [subscriptionId], references: [id])
+  occurrence      String? // subscription period key, e.g. 2026-11
+  createdById     String
+  createdBy       Person        @relation(fields: [createdById], references: [id])
+  createdAt       DateTime      @default(now())
+
+  @@unique([subscriptionId, occurrence])
+}
+
+model Subscription {
+  id         String      @id @default(cuid())
+  name       String
+  customerId String
+  customer   Contact     @relation(fields: [customerId], references: [id])
+  locationId String
+  lines      Json
+  interval   String      @default("MONTH") // MONTH, WEEK
+  nextDate   DateTime    @db.Date
+  endDate    DateTime?   @db.Date
+  active     Boolean     @default(true)
+  createdAt  DateTime    @default(now())
+  drafts     SaleDraft[]
+}
+
+// ───────────── Shipments (§8.4) ─────────────
+
+model Shipment {
+  id           String   @id @default(cuid())
+  saleId       String
+  sale         Sale     @relation(fields: [saleId], references: [id])
+  address      String
+  contactName  String?
+  contactPhone String?
+  carrier      String?
+  trackingRef  String?
+  charge       Decimal  @default(0) @db.Decimal(14, 2)
+  codAmount    Decimal  @default(0) @db.Decimal(14, 2)
+  codRemitted  Decimal  @default(0) @db.Decimal(14, 2)
+  status       String   @default("PENDING") // PENDING, PACKED, DISPATCHED, DELIVERED, RETURNED, CANCELLED
+  deliveredTo  String?
+  notes        String?
+  history      Json     @default("[]")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// ───────────── Discount rules (S08) ─────────────
+
+model DiscountRule {
+  id         String    @id @default(cuid())
+  name       String
+  scope      String // ALL, CATEGORY, BRAND, PRODUCT
+  targetIds  String[]  @default([])
+  percent    Decimal?  @db.Decimal(6, 2)
+  amount     Decimal?  @db.Decimal(14, 2) // fixed per unit
+  startsAt   DateTime?
+  endsAt     DateTime?
+  locationId String?
+  priority   Int       @default(1) // lower wins; rules never stack
+  active     Boolean   @default(true)
+  createdAt  DateTime  @default(now())
+}
+
+// ───────────── Recurring expenses ─────────────
+
+model RecurringExpense {
+  id          String    @id @default(cuid())
+  name        String
+  categoryId  String
+  locationId  String
+  contactId   String?
+  amount      Decimal   @db.Decimal(14, 2)
+  interval    String    @default("MONTH") // MONTH, WEEK
+  nextDate    DateTime  @db.Date
+  endDate     DateTime? @db.Date
+  active      Boolean   @default(true)
+  createdById String
+  createdAt   DateTime  @default(now())
+}
+
+// ───────────── Sales targets (§9.3) ─────────────
+
+model SalesTarget {
+  id          String    @id @default(cuid())
+  personId    String
+  person      Person    @relation(fields: [personId], references: [id])
+  periodStart DateTime  @db.Date
+  periodEnd   DateTime  @db.Date
+  bands       Json // [{ from, to, percent }] non-overlapping
+  mode        String    @default("FLAT") // FLAT: whole amount at the reached band's %; PROGRESSIVE: each slice at its band
+  approvedAt  DateTime?
+  payslipId   String?
+  payslip     Payslip?  @relation(fields: [payslipId], references: [id])
+  snapshot    Json? // achieved value and earning at approval
+  createdAt   DateTime  @default(now())
+}
+
+// ───────────── Essentials (§19) ─────────────
+
+model Memo {
+  id          String   @id @default(cuid())
+  title       String
+  body        String
+  audience    String[] @default([]) // role names; empty = everyone
+  pinned      Boolean  @default(false)
+  createdById String
+  createdBy   Person   @relation(fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Reminder {
+  id           String   @id @default(cuid())
+  title        String
+  details      String?
+  nextAt       DateTime
+  repeat       String   @default("NONE") // NONE, DAILY, WEEKLY, MONTHLY
+  assignedToId String?
+  locationId   String
+  active       Boolean  @default(true)
+  lastFiredKey String? // occurrence already turned into a task (no duplicates)
+  createdById  String
+  createdBy    Person   @relation(fields: [createdById], references: [id])
+  createdAt    DateTime @default(now())
+}
+
+model MessageThread {
+  id        String         @id @default(cuid())
+  subject   String
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+  members   ThreadMember[]
+  messages  StaffMessage[]
+}
+
+model ThreadMember {
+  threadId   String
+  thread     MessageThread @relation(fields: [threadId], references: [id])
+  personId   String
+  person     Person        @relation(fields: [personId], references: [id])
+  lastReadAt DateTime?
+
+  @@id([threadId, personId])
+}
+
+model StaffMessage {
+  id        String        @id @default(cuid())
+  threadId  String
+  thread    MessageThread @relation(fields: [threadId], references: [id])
+  senderId  String
+  sender    Person        @relation(fields: [senderId], references: [id])
+  body      String
+  createdAt DateTime      @default(now())
+
+  @@index([threadId, createdAt])
+}
+
+model KnowledgeArticle {
+  id          String   @id @default(cuid())
+  title       String
+  category    String   @default("General")
+  body        String
+  audience    String[] @default([])
+  revision    Int      @default(1)
+  history     Json     @default("[]") // earlier revisions [{ revision, title, body, at, by }]
+  createdById String
+  createdBy   Person   @relation(fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// Small shop documents kept in Postgres (≤ 4 MB each); access follows the audience roles.
+model DocumentFile {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  mimeType    String
+  size        Int
+  data        Bytes
+  audience    String[] @default([])
+  createdById String
+  createdBy   Person   @relation(fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
 }
 
 // ───────────── Notifications (§18) ─────────────
@@ -1304,6 +1540,12 @@ model Payment {
   payslip      Payslip?              @relation(fields: [payslipId], references: [id])
   settlementId String?
   settlement   CommissionSettlement? @relation(fields: [settlementId], references: [id])
+
+  cheque     Cheque?
+  // A bounced cheque is reversed by an opposite payment pointing back at the original.
+  reversesId String?  @unique
+  reverses   Payment? @relation("PaymentReversal", fields: [reversesId], references: [id])
+  reversedBy Payment? @relation("PaymentReversal")
 
   @@index([paidAt])
 }

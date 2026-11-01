@@ -15,6 +15,9 @@ const DEFAULT_PREFIX: Record<string, string> = {
   RELOAD: "RL",
   PARCEL: "BP",
   PAYROLL: "PR",
+  QUOTE: "QT",
+  SUSPENDED: "SUS",
+  SUBSCRIPTION: "SUB",
 };
 
 // Allocates a unique final document number inside the posting transaction (spec §15.2).
