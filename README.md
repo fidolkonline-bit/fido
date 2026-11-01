@@ -134,6 +134,10 @@ payment accounts, first reports, settings.
   product and opening-stock imports. Cutover checklist (`/products/imports/cutover`): data loaded, figures to
   reconcile with Clicky, items to investigate, next document numbers, go-live gates.
 - Waiting on Clicky: full sales/purchase history import needs a real export or read-only database access.
+- Clicky exports upload as they are (products, customers, suppliers, users): converted in the browser into the
+  import templates, with findings shown before the dry run — reload items kept out of stock, reused SKUs suffixed,
+  advances to store credit, agent + cashier records of one person merged, vendor accounts left out. Opening stock
+  is placed by location name, so Clicky's locations must exist (or be renamed to match) first.
 
 Before the first live payroll: set up EPF/ETF, tax and any overtime / holiday-pay rules as pay components and
 check them against approved sample payslips (spec §26).
