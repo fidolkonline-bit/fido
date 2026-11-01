@@ -32,6 +32,13 @@ SEED_DEMO=1 npm run db:seed   # + demo supplier/products/opening stock
 npm run db:studio      # browse data
 ```
 
+This database is the live one: demo data was cleared on 1 Nov 2026 (`SEED_DEMO` is for a throwaway database only).
+To wipe rehearsal imports before the real cutover — business records go, setup and logins stay — back up first, then:
+
+```bash
+CLEAR_CONFIRM=clear-all-business-data npm run db:clear
+```
+
 The first seed creates the owner login and writes its password to `.env.local` (`ADMIN_PASSWORD`). Change it
 after signing in (Settings → Change my password).
 
