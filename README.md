@@ -57,6 +57,36 @@ npm run db:deploy
 New tables must also get `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` — every app table is locked away from
 Supabase's public REST API; the app reaches Postgres only through Prisma.
 
+## Installed app (PWA) and phone notifications
+
+Fido installs as an app from the same URL on every platform — no app store:
+
+| Device | How to install |
+| --- | --- |
+| Android (Chrome, Samsung Internet) | Tap **Install** on the banner, or ⋮ → *Install app* |
+| iPhone / iPad (iOS 16.4+) | In Safari: Share → **Add to Home Screen**, then open Fido from the new icon |
+| Windows / Mac (Chrome, Edge) | **Install** on the banner, or the install icon in the address bar; it then sits in Start / the taskbar / the Dock |
+
+Each device has **Settings → This device**: install status, turn task notifications on/off, and the start-of-shift test
+(alarm sound + a real push). The service worker (`public/sw.js`) shows an offline screen when there is no network and
+turns pushes into notifications; it caches no pages or data — sales, stock and money always come live from the server.
+
+**Phone notifications (Web Push)** reach a device even when Fido is closed: new tasks (reload requests, bus parcels,
+reminders), the pre-ETA reminder and overdue escalations — to the same people the in-app alarm rings for. Each alert is
+claimed once in `TaskPush`, sent right after the request (and swept again by `/api/cron`), and goes only to devices
+whose login session is still open, so logging out of a shared device stops that person's alerts. To switch it on:
+
+```bash
+npx web-push generate-vapid-keys      # once; keep the private key secret
+```
+
+Set `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` and `VAPID_SUBJECT` (`mailto:you@yourshop.lk` or the app URL — Apple
+rejects a missing one) in Vercel and `.env.local`, apply the migration (`npm run db:deploy`), and redeploy. Until
+both are done the app works as before and push stays off. Changing the keys later makes every device turn
+notifications on again. iPhones only get notifications from the Home Screen app. The repeating alarm sound still
+needs Fido open (browsers don't allow custom alarm sounds from a push); a closed app gets the phone's normal
+notification sound.
+
 ## Code map
 
 | Path | What |
@@ -67,6 +97,8 @@ Supabase's public REST API; the app reaches Postgres only through Prisma.
 | `src/lib/debt.ts`, `debt-rules.ts` | Customer debt ledger, repayment receipts and allocation order (shared with the POS preview) |
 | `src/lib/numbering.ts` | Concurrency-safe document numbers (`INV2026/0001`, `PO2026/0001`, …) |
 | `src/lib/auth.ts` | DB-backed sessions (revocable), server-side permission guards |
+| `src/lib/push.ts`, `src/lib/tasks.ts` | Web Push transport (VAPID, subscriptions per session) and the task alert sweep |
+| `src/components/pwa/`, `public/sw.js`, `src/app/manifest.ts` | Installed app: install prompt, This device settings, service worker, manifest |
 | `src/lib/permissions.ts` | Permission keys and default roles |
 | `src/lib/reports/` | Report definitions (`sales`, `stock`, `money`, `ops`), filters, CSV |
 | `src/lib/imports.ts` | CSV dry run / commit for products, opening stock, contacts, categories |

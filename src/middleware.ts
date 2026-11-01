@@ -12,4 +12,5 @@ export function middleware(req: NextRequest) {
   return NextResponse.next();
 }
 
-export const config = { matcher: ["/((?!login|api/cron|_next|favicon.ico|icon|manifest).*)"] };
+// Public: login, cron (own secret), build files, icons, the web app manifest, the service worker and its offline page.
+export const config = { matcher: ["/((?!login|api/cron|_next|favicon.ico|icon|manifest|sw\\.js|offline\\.html).*)"] };

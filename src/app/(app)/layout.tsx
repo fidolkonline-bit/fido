@@ -4,6 +4,7 @@ import { requireUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { NAV } from "@/lib/nav";
 import { Shell } from "@/components/Shell";
+import { pushPublicKey } from "@/lib/push";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const user = await requireUser();
@@ -24,6 +25,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         locationId={user.location?.id ?? null}
         registerOpen={registerOpen}
         theme={t === "light" || t === "dark" ? t : "system"}
+        vapidKey={pushPublicKey()}
       >
         {children}
       </Shell>

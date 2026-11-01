@@ -2,6 +2,8 @@ import { requireUser, can } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { PageHead, DataTable, Badge } from "@/components/ui";
 import { BusinessForm, LocationForm, PasswordForm } from "./SettingsForms";
+import { DeviceSettings } from "@/components/pwa/DeviceSettings";
+import { pushPublicKey } from "@/lib/push";
 
 export const metadata = { title: "Settings" };
 
@@ -28,6 +30,7 @@ export default async function Settings() {
           <LocationForm />
         </section>
       )}
+      <DeviceSettings vapidKey={pushPublicKey()} admin={admin} />
       <PasswordForm />
     </div>
   );

@@ -149,17 +149,36 @@ model LoginAccount {
 }
 
 model Session {
-  id         String       @id @default(cuid())
-  tokenHash  String       @unique
-  accountId  String
-  account    LoginAccount @relation(fields: [accountId], references: [id])
-  locationId String?
-  createdAt  DateTime     @default(now())
-  expiresAt  DateTime
-  revokedAt  DateTime?
-  userAgent  String?
+  id                String             @id @default(cuid())
+  tokenHash         String             @unique
+  accountId         String
+  account           LoginAccount       @relation(fields: [accountId], references: [id])
+  locationId        String?
+  createdAt         DateTime           @default(now())
+  expiresAt         DateTime
+  revokedAt         DateTime?
+  userAgent         String?
+  pushSubscriptions PushSubscription[]
 
   @@index([accountId])
+}
+
+// Web Push endpoint of one installed app / browser (PWA). Tied to the login session that turned it on, so
+// logging out of a shared shop device stops that person's alerts reaching it; the next login re-binds it.
+model PushSubscription {
+  id            String    @id @default(cuid())
+  endpoint      String    @unique
+  p256dh        String
+  auth          String
+  sessionId     String
+  session       Session   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  userAgent     String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  lastSuccessAt DateTime?
+  lastError     String?
+
+  @@index([sessionId])
 }
 
 model Role {
@@ -1038,9 +1057,24 @@ model StaffTask {
   createdBy       Person         @relation("TaskCreator", fields: [createdById], references: [id])
   createdAt       DateTime       @default(now())
   events          TaskEvent[]
+  pushes          TaskPush[]
 
   @@index([assignedToId, status])
   @@index([locationId, status])
+}
+
+// One row per task alert pushed to phones (NEW, ESCALATED when overdue, DUE_SOON before an ETA). The unique key is the
+// claim, so a retried sweep or two servers never push the same alert twice.
+model TaskPush {
+  id        String    @id @default(cuid())
+  taskId    String
+  task      StaffTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  reason    String // NEW, ESCALATED, DUE_SOON
+  devices   Int       @default(0)
+  delivered Int       @default(0)
+  createdAt DateTime  @default(now())
+
+  @@unique([taskId, reason])
 }
 
 model TaskEvent {

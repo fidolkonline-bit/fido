@@ -7,6 +7,7 @@ import type { NavGroup } from "@/lib/nav";
 import { switchLocation, logout } from "@/app/(app)/actions";
 import { TaskAlerts } from "./TaskAlerts";
 import { ThemeSwitch, type ThemeChoice } from "./ThemeSwitch";
+import { InstallBanner } from "./pwa/InstallBanner";
 
 type Props = {
   nav: NavGroup[];
@@ -15,6 +16,7 @@ type Props = {
   locationId: string | null;
   registerOpen: boolean;
   theme: ThemeChoice;
+  vapidKey: string | null;
   children: ReactNode;
 };
 
@@ -33,7 +35,7 @@ function activeHref(hrefs: string[], path: string, query: string) {
   return best;
 }
 
-export function Shell({ nav, user, locations, locationId, registerOpen, theme, children }: Props) {
+export function Shell({ nav, user, locations, locationId, registerOpen, theme, vapidKey, children }: Props) {
   const path = usePathname();
   const query = useSearchParams().toString();
   const [open, setOpen] = useState(false);
@@ -96,7 +98,7 @@ export function Shell({ nav, user, locations, locationId, registerOpen, theme, c
       </aside>
       <div className="scrim" onClick={() => setOpen(false)} />
 
-      <main className="main" id="main"><TaskAlerts />{children}</main>
+      <main className="main" id="main"><InstallBanner /><TaskAlerts vapidKey={vapidKey} />{children}</main>
 
       <nav className="bottombar" aria-label="Quick actions">
         <Link href="/" aria-current={current("/")}>

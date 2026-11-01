@@ -16,7 +16,7 @@
   --err: #a22f38;
   --radius: 5px;
   --font: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Noto Sans Sinhala", "Iskoola Pota", "Noto Sans Tamil", "Nirmala UI", Arial, sans-serif;
-  --topbar-h: 52px;
+  --topbar-h: calc(52px + env(safe-area-inset-top, 0px)); /* installed iPhone app draws under the status bar */
   --bottombar-h: 60px;
   color-scheme: light;
 }
@@ -132,7 +132,8 @@ table.dt { width: 100%; border-collapse: collapse; font-size: 13px; }
 .shell { min-height: 100dvh; display: grid; grid-template-columns: 220px minmax(0, 1fr); grid-template-rows: var(--topbar-h) 1fr; }
 .topbar {
   grid-column: 1 / -1; position: sticky; top: 0; z-index: 30; display: flex; align-items: center; gap: 12px;
-  background: var(--nav); color: var(--nav-text); padding: 0 16px; height: var(--topbar-h);
+  background: var(--nav); color: var(--nav-text); height: var(--topbar-h);
+  padding: env(safe-area-inset-top, 0px) max(16px, env(safe-area-inset-right, 0px)) 0 max(16px, env(safe-area-inset-left, 0px));
 }
 .brand { font-weight: 700; letter-spacing: 2px; font-size: 16px; color: var(--nav-text); text-decoration: none; white-space: nowrap; }
 .topbar .meta { font-size: 12px; color: var(--nav-muted); display: flex; gap: 14px; align-items: center; min-width: 0; }
@@ -219,6 +220,12 @@ table.dt { width: 100%; border-collapse: collapse; font-size: 13px; }
 .label .l-meta { font-size: 7pt; }
 
 /* Staff alerts */
+/* Installed app (PWA) */
+.install-banner { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin: -4px 0 14px; }
+.device-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding-top: 12px; border-top: 1px solid var(--rule); }
+.device-row > div:first-child { flex: 1 1 280px; min-width: 0; }
+@media (display-mode: standalone) { body { overscroll-behavior-y: none; -webkit-tap-highlight-color: transparent; } }
+
 .alertbar { position: sticky; top: calc(var(--topbar-h) + 6px); z-index: 20; margin: -8px 0 14px; display: flex; flex-direction: column; gap: 8px; }
 .alertbar .alert-count { background: var(--err); border-color: var(--err); color: #fff; font-weight: 700; }
 .alertbar.ringing .alert-count { animation: pulse 1s ease-in-out infinite; }
@@ -244,7 +251,7 @@ table.dt { width: 100%; border-collapse: collapse; font-size: 13px; }
 @media (max-width: 760px) {
   .shell { grid-template-columns: minmax(0, 1fr); }
   .menu-toggle { display: inline-flex; }
-  .topbar { padding: 0 8px 0 4px; gap: 6px; }
+  .topbar { padding: env(safe-area-inset-top, 0px) max(8px, env(safe-area-inset-right, 0px)) 0 max(4px, env(safe-area-inset-left, 0px)); gap: 6px; }
   .topbar .meta .hide-sm, .topbar .hide-sm { display: none; }
   .sidebar {
     position: fixed; top: var(--topbar-h); left: 0; bottom: 0; width: min(300px, 86vw); height: auto; z-index: 40;

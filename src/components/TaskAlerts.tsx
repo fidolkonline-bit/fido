@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ackTask } from "@/app/(app)/tasks/actions";
+import { enablePush, notify, setBadge } from "@/components/pwa/device";
 
 type Alert = { id: string; kind: string; title: string; details: string | null; priority: string; createdAt: string; dueAt: string | null; escalated: boolean; href: string; reason: "NEW" | "DUE_SOON" | "ESCALATED" };
 
@@ -11,7 +12,7 @@ const RING_EVERY_MS = 20_000;
 const MAX_RINGS = 30; // bounded repeat (~10 min) per batch of alerts (spec §13)
 const STORE = "fido-alert-sound";
 
-function useAlarm() {
+export function useAlarm() {
   const ctx = useRef<AudioContext | null>(null);
   const unlock = useCallback(async () => {
     ctx.current ??= new AudioContext();
@@ -42,7 +43,8 @@ function useAlarm() {
 }
 
 // Shown on every signed-in screen: polls the server, rings for new/escalated tasks until acknowledged.
-export function TaskAlerts() {
+// With Web Push on (Settings → This device) the phone is also alerted while the app is closed.
+export function TaskAlerts({ vapidKey }: { vapidKey: string | null }) {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [online, setOnline] = useState(true);
   const [soundOn, setSoundOn] = useState(false);
@@ -67,8 +69,8 @@ export function TaskAlerts() {
         fresh.forEach((a) => seen.current.add(a.id + a.reason));
         rings.current = 0;
         setOpen(true);
-        if (document.hidden && "Notification" in window && Notification.permission === "granted") {
-          for (const a of fresh) new Notification(a.reason === "ESCALATED" ? "Overdue task" : "Fido task", { body: a.title, tag: a.id, requireInteraction: true });
+        if (document.hidden) {
+          for (const a of fresh) void notify(a.reason === "ESCALATED" ? "Overdue task" : "Fido task", { body: a.title, tag: a.id, requireInteraction: true, data: { url: a.href } });
         }
       }
     } catch {
@@ -82,8 +84,22 @@ export function TaskAlerts() {
     const vis = () => { if (!document.hidden) poll(); };
     document.addEventListener("visibilitychange", vis);
     window.addEventListener("online", poll);
-    return () => { clearInterval(t); document.removeEventListener("visibilitychange", vis); window.removeEventListener("online", poll); };
+    // A push arrived: the service worker asks open copies to refresh now.
+    const msg = (e: MessageEvent) => { if (e.data?.type === "fido:poll") poll(); };
+    navigator.serviceWorker?.addEventListener("message", msg);
+    return () => {
+      clearInterval(t); document.removeEventListener("visibilitychange", vis); window.removeEventListener("online", poll);
+      navigator.serviceWorker?.removeEventListener("message", msg);
+    };
   }, [poll]);
+
+  // App icon badge (installed app on Android / Windows / Mac / iPhone) shows how many tasks are waiting.
+  useEffect(() => setBadge(alerts.length), [alerts.length]);
+
+  // Notifications already allowed on this device: keep its push subscription tied to whoever is signed in now.
+  useEffect(() => {
+    if (vapidKey && "Notification" in window && Notification.permission === "granted") void enablePush(vapidKey, true);
+  }, [vapidKey]);
 
   // Keep ringing while something unacknowledged is waiting.
   const loud = alerts.some((a) => a.reason !== "DUE_SOON");
@@ -106,6 +122,7 @@ export function TaskAlerts() {
     try { localStorage.setItem(STORE, "on"); } catch {}
     setSoundOn(true);
     if ("Notification" in window && Notification.permission === "default") await Notification.requestPermission();
+    if (vapidKey) await enablePush(vapidKey, true); // alerts then also reach this device while Fido is closed
   };
 
   const ack = async (id: string) => {
