@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { requirePermission } from "@/lib/auth";
+import { requirePermission, can } from "@/lib/auth";
 import { formError, str, num, type FormState } from "@/lib/forms";
 
 const productSchema = z.object({
@@ -53,12 +53,26 @@ export async function saveProduct(_: FormState, f: FormData): Promise<FormState>
     const data = parse(f);
     const p = id ? await db.product.update({ where: { id }, data }) : await db.product.create({ data });
     savedId = p.id;
+    if (can(user, "pricing.manage")) await saveTierPrices(p.id, f);
     await db.auditEvent.create({ data: { actorId: user.personId, action: id ? "PRODUCT_UPDATED" : "PRODUCT_CREATED", subjectType: "Product", subjectId: p.id } });
   } catch (e) {
     return formError(e);
   }
   revalidatePath("/products");
   redirect(`/products/${savedId}`);
+}
+
+// Tier price matrix: empty = not set (default price applies); 0 is stored but only treated as free once confirmed.
+async function saveTierPrices(productId: string, f: FormData) {
+  const tiers = await db.priceGroup.findMany({ select: { id: true } });
+  for (const t of tiers) {
+    if (!f.has(`tier_${t.id}`)) continue;
+    const v = num(f, `tier_${t.id}`);
+    if (v === null) { await db.productPrice.deleteMany({ where: { productId, priceGroupId: t.id } }); continue; }
+    if (!(v >= 0)) throw new Error("Tier prices cannot be negative.");
+    const zeroConfirmed = v === 0 && f.get(`tierfree_${t.id}`) === "on";
+    await db.productPrice.upsert({ where: { productId_priceGroupId: { productId, priceGroupId: t.id } }, create: { productId, priceGroupId: t.id, price: v, zeroConfirmed }, update: { price: v, zeroConfirmed } });
+  }
 }
 
 export async function setProductActive(f: FormData) {

@@ -1,5 +1,6 @@
 // Clears every business record and keeps the setup: business, locations, roles, logins (and their people and
-// sessions), payment accounts, units, warranties, expense categories, HR masters, numbering, templates, reload wallets.
+// sessions), payment accounts, units, warranties, expense categories, HR masters, numbering, templates, reload wallets,
+// price tiers and their role access.
 // Used to remove demo data and, later, rehearsal imports before the real cutover (spec §22).
 //
 //   CLEAR_CONFIRM=clear-all-business-data npm run db:clear
@@ -10,7 +11,7 @@ import { PrismaClient } from "@prisma/client";
 const KEEP = [
   "Business", "Location", "Role", "Person", "LoginAccount", "Session", "UserLocation", "CommissionProfile", "Account", "AppSetting",
   "Unit", "Warranty", "ExpenseCategory", "Department", "Designation", "LeaveType", "Shift", "NumberScheme", "NotificationTemplate",
-  "ReloadWallet", "_prisma_migrations",
+  "ReloadWallet", "PriceGroup", "PriceGroupAccess", "_prisma_migrations",
 ];
 
 async function main() {

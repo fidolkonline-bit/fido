@@ -77,6 +77,7 @@ async function loadUser() {
     name: account.person.fullName,
     username: account.username,
     role: account.role.name,
+    roleId: account.roleId,
     permissions: new Set(account.role.permissions),
     maxDiscountPct: account.maxDiscountPct,
     locations,

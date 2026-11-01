@@ -25,6 +25,8 @@ const yes = (v: string) => /^(y|yes|true|1)$/i.test(v);
 export type ImportKind = "PRODUCTS" | "OPENING_STOCK" | "CONTACTS" | "CATEGORIES" | "PEOPLE";
 
 // `notes` are file-level findings from a converter (e.g. the Clicky export reader); stored with the batch for review.
+const tierColumns = async () => (await db.priceGroup.findMany({ select: { id: true, name: true } })).map((g) => ({ ...g, key: g.name.trim().toLowerCase().replace(/[\s-]+/g, "_") }));
+
 export async function dryRun(user: CurrentUser, kind: ImportKind, fileName: string, text: string, existing: "UPDATE" | "SKIP", notes: string[] = []) {
   const rows = parseCsv(text);
   if (!rows.length) throw new ImportError("The file has no data rows (the first row must be the column headings).");
@@ -33,6 +35,9 @@ export async function dryRun(user: CurrentUser, kind: ImportKind, fileName: stri
 
   if (kind === "PRODUCTS") {
     if (!("sku" in rows[0]) || !("name" in rows[0])) throw new ImportError("Columns sku and name are required. Download the template.");
+    // A column named after a price tier (e.g. "VIP Customer Prices") sets that tier's price. Legacy 0s stay unverified.
+    const tierCols = (await tierColumns()).filter((t) => t.key in rows[0]);
+    if (tierCols.length) notes = [...notes, `Tier prices from columns: ${tierCols.map((t) => t.name).join(", ")}. Empty = default price; 0 is kept but not used as free until confirmed on the product.`];
     const existingSkus = new Set((await db.product.findMany({ where: { sku: { in: rows.map((r) => r.sku) } }, select: { sku: true } })).map((p) => p.sku));
     const seen = new Set<string>();
     rows.forEach((r, i) => {
@@ -42,7 +47,7 @@ export async function dryRun(user: CurrentUser, kind: ImportKind, fileName: stri
       if (!r.name) errs.push("name is empty");
       if (seen.has(r.sku)) errs.push(`SKU ${r.sku} appears twice in this file`);
       seen.add(r.sku);
-      for (const k of ["sell_price", "min_price", "cost", "alert_qty"]) {
+      for (const k of ["sell_price", "min_price", "cost", "alert_qty", ...tierCols.map((t) => t.key)]) {
         const v = num(r[k] ?? "");
         if (v !== null && (!Number.isFinite(v) || v < 0)) errs.push(`${k} is not a valid number`);
       }
@@ -212,6 +217,13 @@ export async function commitBatch(user: CurrentUser, batchId: string) {
       for (const r of ok.filter((x) => x.action === "update")) {
         const d = r.data as Record<string, string>;
         await tx.product.update({ where: { sku: d.sku }, data: fields(d) });
+      }
+      const tierCols = (await tierColumns()).filter((t) => data.some((r) => (r[t.key] ?? "") !== ""));
+      if (tierCols.length) {
+        const ids = new Map((await tx.product.findMany({ where: { sku: { in: data.map((r) => r.sku) } }, select: { id: true, sku: true } })).map((p) => [p.sku, p.id]));
+        const prices = data.flatMap((r) => tierCols.filter((t) => (r[t.key] ?? "") !== "").map((t) => ({ productId: ids.get(r.sku)!, priceGroupId: t.id, price: D(num(r[t.key])!) })));
+        await tx.productPrice.deleteMany({ where: { OR: tierCols.map((t) => ({ priceGroupId: t.id, productId: { in: prices.filter((x) => x.priceGroupId === t.id).map((x) => x.productId) } })) } });
+        await tx.productPrice.createMany({ data: prices });
       }
     } else if (batch.kind === "CONTACTS") {
       const rows = ok.map((r) => ({ action: r.action, d: r.data as Record<string, string> }));

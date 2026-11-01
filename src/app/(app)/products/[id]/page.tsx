@@ -14,7 +14,7 @@ export async function generateMetadata({ params }: { params: Promise<{ id: strin
 export default async function ProductDetail({ params }: { params: Promise<{ id: string }> }) {
   const user = await requirePermission("products.view");
   const { id } = await params;
-  const p = await db.product.findUnique({ where: { id }, include: { category: true, brand: true, unit: true, warranty: true } });
+  const p = await db.product.findUnique({ where: { id }, include: { category: true, brand: true, unit: true, warranty: true, prices: { include: { priceGroup: true } } } });
   if (!p) notFound();
   const showCost = can(user, "cost.view");
   const locId = user.location?.id;
@@ -55,6 +55,9 @@ export default async function ProductDetail({ params }: { params: Promise<{ id: 
         <div><span className="muted">Brand / unit</span><br />{p.brand?.name ?? "—"} · {p.unit?.shortName ?? "—"}</div>
         <div><span className="muted">Warranty</span><br />{p.warranty?.name ?? "—"}</div>
         <div><span className="muted">Barcode</span><br />{p.barcode ?? "—"}</div>
+        <div><span className="muted">Tier prices</span><br />{p.prices.length ? p.prices.filter((x) => x.priceGroup.active).sort((a, b) => a.priceGroup.sortOrder - b.priceGroup.sortOrder).map((x) => (
+          <span key={x.id} style={{ display: "block" }}>{x.priceGroup.name}: {x.price.isZero() && !x.zeroConfirmed ? <span style={{ color: "var(--warn)" }}>0 (not verified — default price is used)</span> : `Rs. ${money(x.price)}`}</span>
+        )) : "None — default price for every tier"}</div>
         <div><span className="muted">Status</span><br />{p.active ? <Badge tone="ok">Active</Badge> : <Badge>Inactive</Badge>}{p.notForSale && <> <Badge tone="warn">Not for sale</Badge></>}</div>
       </div>
 

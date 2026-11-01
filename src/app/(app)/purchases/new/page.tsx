@@ -18,7 +18,7 @@ export default async function NewReceipt({ searchParams }: { searchParams: Promi
       poLineId: l.id, due: Number(l.qtyOrdered.minus(l.qtyReceived)), unitCost: l.unitCost.toString(),
       product: {
         id: l.product.id, sku: l.product.sku, barcode: l.product.barcode, name: l.product.name, price: l.product.sellPrice.toFixed(2),
-        minPrice: null, cost: l.unitCost.toString(), available: null, lot: null, tracked: l.product.trackDevices, offer: null,
+        minPrice: null, cost: l.unitCost.toString(), available: null, lot: null, tracked: l.product.trackDevices, offer: null, tierPrices: {}, zeroUnverified: [],
       },
     })),
   };

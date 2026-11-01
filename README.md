@@ -146,6 +146,20 @@ payment accounts, first reports, settings.
   advances to store credit, agent + cashier records of one person merged, vendor accounts left out. Opening stock
   is placed by location name, so Clicky's locations must exist (or be renamed to match) first.
 
+**POS lot choice and price tiers:**
+- The salesperson picks the lot actually handed over (lot, GRN / source, location, available). One eligible lot is
+  preselected; several must be chosen. A short lot shows the shortage and can be split across lots explicitly — never
+  topped up silently. Phones are chosen by IMEI with their lot and GRN shown. Lots are locked and rechecked at
+  completion; each lot keeps its own original cost (the costing policy is unchanged).
+- Selling-price tiers are configuration (Settings › Selling price tiers): create, rename, describe, order,
+  (de)activate, and choose which roles may pick each tier. Prices, customer groups and sales link by id; a tier used
+  by a sale can only be deactivated. Five tiers were seeded from the old system.
+- Product × tier price matrix on each product (and as columns named after the tier in the product import). Empty =
+  default price with a visible fallback note; a legacy 0 is not treated as free until confirmed.
+- Customer groups pick a tier or a % on the default price. The POS shows customer and tier together; an override needs
+  `pricing.tier_override` and role access. Changing customer or tier previews the new prices — Apply or Cancel — and
+  keeps lots, devices and quantities. Sales store the price rule, rule price and tier name as sold.
+
 Before the first live payroll: set up EPF/ETF, tax and any overtime / holiday-pay rules as pay components and
 check them against approved sample payslips (spec §26).
 

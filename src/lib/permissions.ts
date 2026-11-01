@@ -15,6 +15,8 @@ export const PERMISSIONS = {
   "sales.create": "Sell at POS",
   "sales.override_price": "Override price and discount limits",
   "sales.credit_override": "Sell beyond customer credit limit",
+  "pricing.tier_override": "Choose a different price tier for a sale (tiers allowed for the role)",
+  "pricing.manage": "Manage price tiers, product tier prices and customer group pricing",
   "returns.create": "Process sell returns, refunds and exchanges",
   "stock.adjust": "Stock adjustments, write-offs and hold releases",
   "stock.transfer": "Send and receive stock transfers",
@@ -56,7 +58,7 @@ export const DEFAULT_ROLES: { name: string; description: string; permissions: Pe
     permissions: [
       "contacts.view", "contacts.manage", "products.view", "products.manage", "cost.view",
       "purchases.view", "purchases.post", "sales.view", "sales.create", "sales.override_price",
-      "sales.credit_override", "register.operate", "register.review", "accounts.view", "reports.view",
+      "sales.credit_override", "pricing.tier_override", "register.operate", "register.review", "accounts.view", "reports.view",
       "returns.create", "stock.adjust", "stock.transfer", "expenses.view", "expenses.manage", "purchases.claims", "imports.run",
       "repairs.view", "repairs.manage", "repairs.credentials", "reloads.request", "reloads.process", "reloads.wallets", "tasks.manage",
       "hr.view", "leave.approve", "attendance.manage", "essentials.manage",

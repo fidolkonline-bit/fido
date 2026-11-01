@@ -2,21 +2,31 @@
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
-import { searchProducts, type ProductHit, type DeviceHit } from "../search";
+import { searchProducts, listLayers, type ProductHit, type DeviceHit, type LayerHit } from "../search";
+import { resolvePrice, type Policy } from "@/lib/price-rules";
 import { DevicePicker, deviceLabel } from "@/components/DevicePicker";
 import { completeSale, searchCustomers } from "./actions";
 import { quickAddCustomer } from "../contacts/actions";
 import { saveDraftAction } from "../sales/drafts/actions";
 
-type CartLine = { product: ProductHit; qty: number; price: string; discount: string; devices: DeviceHit[] };
+// lots: the salesperson's explicit lot choice (one row, or an explicit split); lotOptions: eligible lots here (null = loading).
+type LotPick = { layerId: string; qty: number };
+type CartLine = {
+  product: ProductHit; qty: number; price: string; discount: string; devices: DeviceHit[];
+  rule: string; listPrice: number; fallback: boolean; lots: LotPick[]; lotOptions: LayerHit[] | null;
+};
 export type DraftPrefill = { id: string; number: string; lines: { product: ProductHit; qty: number; price: string; discount: string }[] };
 type Pay = { key: string; method: "CASH" | "CARD" | "BANK_TRANSFER" | "CHEQUE" | "STORE_CREDIT" | "OTHER"; amount: string; accountId: string; reference: string };
-type Customer = { id: string; name: string; phone: string | null; storeCredit?: number };
+type Customer = { id: string; name: string; phone: string | null; storeCredit?: number; pricing?: Policy };
+type Tier = { id: string; name: string; allowed: boolean };
+const STANDARD: Policy = { tier: null, adjustmentPct: null, groupName: null };
+const needsLot = (l: CartLine) => l.product.available !== null && !l.product.tracked;
 type Props = {
   locationName: string; rounding: number; maxDiscountPct: number; canQuickAdd: boolean; selfId: string;
   salespeople: { id: string; name: string }[]; agents: { id: string; name: string }[]; accounts: { id: string; name: string; type: string }[];
   initialCustomer: Customer | null;
   initialDraft: DraftPrefill | null;
+  tiers: Tier[]; canOverrideTier: boolean;
 };
 
 const n = (v: string | number) => { const x = Number(v); return Number.isFinite(x) ? x : 0; };
@@ -30,10 +40,18 @@ export function Pos(props: Props) {
   const [idem, setIdem] = useState(() => crypto.randomUUID());
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<ProductHit[]>([]);
-  const [cart, setCart] = useState<CartLine[]>(() => (props.initialDraft?.lines ?? []).map((l) => ({ ...l, devices: [] })));
+  const [cart, setCart] = useState<CartLine[]>(() => (props.initialDraft?.lines ?? []).map((l) => {
+    // A resumed quote keeps its saved price; the rule shows whether that still matches today's pricing.
+    const r = resolvePrice(l.product, props.initialCustomer?.pricing ?? STANDARD);
+    return { ...l, devices: [], listPrice: r.price, fallback: r.fallback, rule: n(l.price) === r.price ? r.rule : "Saved price from the quote / parked sale", lots: [], lotOptions: null };
+  }));
   const [draftId, setDraftId] = useState<string | null>(props.initialDraft?.id ?? null);
   const [saved, setSaved] = useState<{ id: string; number: string; kind: string } | null>(null);
   const [customer, setCustomer] = useState<Customer | null>(props.initialCustomer);
+  // Tier override for this sale: undefined = follow the customer's group policy, null = default price, id = that tier.
+  const [override, setOverride] = useState<string | null | undefined>(undefined);
+  const [reprice, setReprice] = useState<{ customer: Customer | null; override: string | null | undefined; rows: { id: string; name: string; from: number; to: number; rule: string; fallback: boolean }[] } | null>(null);
+  const [custEditing, setCustEditing] = useState(false);
   const [custQ, setCustQ] = useState("");
   const [custHits, setCustHits] = useState<Customer[]>([]);
   const [newCust, setNewCust] = useState<{ name: string; phone: string } | null>(null);
@@ -52,6 +70,56 @@ export function Pos(props: Props) {
   const searchSeq = useRef(0);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const custTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  const policyFor = (c: Customer | null, o: string | null | undefined): Policy =>
+    o === undefined ? (c?.pricing ?? STANDARD) : o === null ? STANDARD : { tier: props.tiers.find((t) => t.id === o) ?? null, adjustmentPct: null, groupName: null };
+  const policy = policyFor(customer, override);
+  const priced = (p: ProductHit) => { const r = resolvePrice(p, policy); return { price: r.price.toFixed(2), listPrice: r.price, rule: r.rule, fallback: r.fallback }; };
+  const newLine = (p: ProductHit, devices: DeviceHit[] = []): CartLine => ({ product: p, qty: Math.max(1, devices.length), discount: "", devices, lots: [], lotOptions: null, ...priced(p) });
+
+  // Changing customer or tier with items in the cart shows the price changes first; lots, devices and quantities never change.
+  const applyPricing = (c: Customer | null, o: string | null | undefined) => {
+    const next = policyFor(c, o);
+    setCustomer(c); setOverride(o); setReprice(null);
+    setCart((cs) => cs.map((l) => { const r = resolvePrice(l.product, next); return { ...l, price: r.price.toFixed(2), listPrice: r.price, rule: r.rule, fallback: r.fallback }; }));
+  };
+  const requestPricing = (c: Customer | null, o: string | null | undefined) => {
+    const next = policyFor(c, o);
+    const rows = cart.map((l) => { const r = resolvePrice(l.product, next); return { id: l.product.id, name: l.product.name, from: n(l.price), to: r.price, rule: r.rule, fallback: r.fallback }; });
+    if (rows.every((r, i) => r.from === r.to && cart[i].rule === r.rule)) return applyPricing(c, o);
+    setReprice({ customer: c, override: o, rows });
+  };
+
+  // Eligible lots for a line: this location's saleable stock only. One lot is preselected; several need a choice.
+  const loadLots = async (productId: string) => {
+    const opts = await listLayers(productId);
+    setCart((cs) => cs.map((l) => {
+      if (l.product.id !== productId) return l;
+      const kept = l.lots.filter((x) => !x.layerId || opts.some((o) => o.id === x.layerId));
+      return { ...l, lotOptions: opts, lots: kept.length ? kept : opts.length === 1 ? [{ layerId: opts[0].id, qty: l.qty }] : [] };
+    }));
+  };
+  const lotsKey = cart.filter((l) => needsLot(l) && l.lotOptions === null).map((l) => l.product.id).join(",");
+  useEffect(() => { for (const id of lotsKey.split(",").filter(Boolean)) loadLots(id); }, [lotsKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const setQty = (id: string, qty: number) => setCart((cs) => cs.map((l) => (l.product.id !== id ? l : { ...l, qty, lots: l.lots.length === 1 ? [{ ...l.lots[0], qty }] : l.lots })));
+  const setLots = (id: string, f: (lots: LotPick[], l: CartLine) => LotPick[]) =>
+    setCart((cs) => cs.map((l) => { if (l.product.id !== id) return l; const lots = f(l.lots, l); return { ...l, lots, qty: lots.length > 1 ? lots.reduce((a, x) => a + x.qty, 0) : l.qty }; }));
+  const lotOf = (l: CartLine, layerId: string) => l.lotOptions?.find((o) => o.id === layerId);
+  const lotLabel = (o: LayerHit) => `${o.lotCode ?? "(no lot)"} · ${o.reference ?? "—"} · ${o.location} · ${n(o.qtyRemaining)} available`;
+  const lotIssue = (l: CartLine): string | null => {
+    if (!needsLot(l)) return null;
+    if (!l.lotOptions) return "Loading lots…";
+    if (!l.lotOptions.length) return "No stock in any lot at this location";
+    if (!l.lots.length || l.lots.some((x) => !x.layerId)) return l.lotOptions.length > 1 ? "Choose the lot being supplied" : "Choose the lot";
+    for (const x of l.lots) {
+      const o = lotOf(l, x.layerId);
+      if (!o) return "That lot is no longer available — choose another";
+      if (x.qty > n(o.qtyRemaining)) return `Lot ${o.lotCode ?? "(no lot)"} has only ${n(o.qtyRemaining)} — ${round2(x.qty - n(o.qtyRemaining))} short`;
+    }
+    if (Math.abs(l.lots.reduce((a, x) => a + x.qty, 0) - l.qty) > 1e-9) return "Lot quantities do not add up to the line quantity";
+    return null;
+  };
 
   useEffect(() => { if (window.matchMedia("(pointer: fine)").matches) searchRef.current?.focus(); }, [done]);
 
@@ -80,7 +148,7 @@ export function Pos(props: Props) {
   const addDevice = (p: ProductHit, d: DeviceHit) => {
     setCart((c) => {
       const i = c.findIndex((l) => l.product.id === p.id);
-      if (i < 0) return [...c, { product: p, qty: 1, price: p.price, discount: "", devices: [d] }];
+      if (i < 0) return [...c, newLine(p, [d])];
       if (c[i].devices.some((x) => x.id === d.id)) return c;
       return c.map((l, j) => (j === i ? { ...l, devices: [...l.devices, d], qty: l.devices.length + 1 } : l));
     });
@@ -102,8 +170,8 @@ export function Pos(props: Props) {
     }
     setCart((c) => {
       const i = c.findIndex((l) => l.product.id === p.id);
-      if (i >= 0) return c.map((l, j) => (j === i ? { ...l, qty: l.qty + 1 } : l));
-      return [...c, { product: p, qty: 1, price: p.price, discount: "", devices: [] }];
+      if (i >= 0) return c.map((l, j) => (j === i ? { ...l, qty: l.qty + 1, lots: l.lots.length === 1 ? [{ ...l.lots[0], qty: l.lots[0].qty + 1 }] : l.lots } : l));
+      return [...c, newLine(p)];
     });
     setHits([]); setError(null);
     if (!fromScan) {
@@ -146,7 +214,7 @@ export function Pos(props: Props) {
   };
 
   const reset = () => {
-    setCart([]); setPicker(null); setCustomer(null); setCustQ(""); setMode("NONE"); setAgentId(""); setInvDisc("");
+    setCart([]); setPicker(null); setCustomer(null); setOverride(undefined); setReprice(null); setCustEditing(false); setCustQ(""); setMode("NONE"); setAgentId(""); setInvDisc("");
     setPays([{ key: "p0", method: "CASH", amount: "", accountId: "", reference: "" }]);
     setError(null); setDone(null); setIdem(crypto.randomUUID()); setDraftId(null); setSaved(null);
   };
@@ -171,7 +239,8 @@ export function Pos(props: Props) {
       const r = await completeSale({
         idempotencyKey: idem,
         customerId: customer?.id ?? null,
-        lines: cart.map((l) => ({ productId: l.product.id, qty: l.qty, unitPrice: l.price, discount: round2(n(l.discount) + offerAmt(l)), deviceIds: l.devices.map((d) => d.id), discountRuleId: l.product.offer?.ruleId ?? null })),
+        lines: cart.map((l) => ({ productId: l.product.id, qty: l.qty, unitPrice: l.price, discount: round2(n(l.discount) + offerAmt(l)), deviceIds: l.devices.map((d) => d.id), lots: l.lots.filter((x) => x.layerId), discountRuleId: l.product.offer?.ruleId ?? null })),
+        ...(override !== undefined ? { tierOverride: override } : {}),
         draftId,
         invoiceDiscount: n(invDisc),
         commissionMode: mode,
@@ -239,14 +308,50 @@ export function Pos(props: Props) {
             <div className="empty">Cart is empty. Scan or search to add items.</div>
           ) : (
             cart.map((l) => {
-              const over = l.product.available !== null && l.qty > n(l.product.available);
+              const issue = lotIssue(l);
+              const manual = n(l.price) !== l.listPrice;
+              const spare = (l.lotOptions ?? []).filter((o) => !l.lots.some((x) => x.layerId === o.id));
               return (
                 <div className="cart-line" key={l.product.id}>
                   <div className="c-name">
-                    <span><strong style={{ fontWeight: 500 }}>{l.product.name}</strong><br />{l.product.offer && <span className="small" style={{ color: "var(--ok)" }}>Offer: {l.product.offer.name} −{fmt(offerAmt(l))}<br /></span>}<span className="small muted">{l.product.sku}{over && !l.product.tracked && <span style={{ color: "var(--err)" }}> · only {n(l.product.available!)} available</span>}</span>
+                    <span><strong style={{ fontWeight: 500 }}>{l.product.name}</strong><br />{l.product.offer && <span className="small" style={{ color: "var(--ok)" }}>Offer: {l.product.offer.name} −{fmt(offerAmt(l))}<br /></span>}<span className="small muted">{l.product.sku}</span>
+                      <span className="small" style={{ display: "block", color: l.fallback ? "var(--warn)" : "var(--muted)" }}>Price: {l.rule}{manual ? ` · changed by hand from ${fmt(l.listPrice)}` : ""}</span>
+                      {needsLot(l) && (
+                        <span className="lot-pick">
+                          {l.lots.length === 0 && l.lotOptions && l.lotOptions.length > 0 && (
+                            <select value="" aria-label={`Lot for ${l.product.name}`} onChange={(e) => setLots(l.product.id, () => [{ layerId: e.target.value, qty: l.qty }])}>
+                              <option value="">Choose lot…</option>{l.lotOptions.map((o) => <option key={o.id} value={o.id}>{lotLabel(o)}</option>)}
+                            </select>
+                          )}
+                          {l.lots.map((x, i) => {
+                            const o = lotOf(l, x.layerId);
+                            return (
+                              <span key={i} className="lot-row">
+                                <select value={x.layerId} aria-label={`Lot ${i + 1} for ${l.product.name}`} onChange={(e) => setLots(l.product.id, (ls) => ls.map((y, j) => (j === i ? { ...y, layerId: e.target.value } : y)))}>
+                                  {!x.layerId && <option value="">Choose lot…</option>}
+                                  {(l.lotOptions ?? []).filter((op) => op.id === x.layerId || !l.lots.some((y) => y.layerId === op.id)).map((op) => <option key={op.id} value={op.id}>{lotLabel(op)}</option>)}
+                                </select>
+                                {l.lots.length > 1 && <>
+                                  <input value={x.qty} inputMode="decimal" aria-label={`Quantity from lot ${o?.lotCode ?? i + 1}`} onChange={(e) => setLots(l.product.id, (ls) => ls.map((y, j) => (j === i ? { ...y, qty: Math.max(0, n(e.target.value)) } : y)))} />
+                                  <button type="button" className="btn-ghost" onClick={() => setLots(l.product.id, (ls) => ls.filter((_, j) => j !== i))} aria-label="Remove this lot">✕</button>
+                                </>}
+                              </span>
+                            );
+                          })}
+                          {issue && <span style={{ color: issue.startsWith("Loading") ? "var(--muted)" : "var(--err)" }}>{issue}</span>}
+                          {issue?.includes("short") && spare.length > 0 && (
+                            <button type="button" className="btn btn-sm" onClick={() => setLots(l.product.id, (ls) => {
+                              // Explicit split: keep what the chosen lot has, ask for another lot for the rest.
+                              const out: LotPick[] = ls.map((y) => { const op = lotOf(l, y.layerId); return op && y.qty > n(op.qtyRemaining) ? { ...y, qty: n(op.qtyRemaining) } : y; });
+                              const rest = round2(l.qty - out.reduce((a, y) => a + y.qty, 0));
+                              return [...out, { layerId: "", qty: rest }];
+                            })}>Split across another lot</button>
+                          )}
+                        </span>
+                      )}
                       {l.devices.map((d) => (
                         <span key={d.id} className="small" style={{ display: "flex", gap: 6, alignItems: "center", fontVariantNumeric: "tabular-nums" }}>
-                          IMEI {deviceLabel(d)}
+                          IMEI {deviceLabel(d)}{d.lotCode || d.reference ? <span className="muted"> · lot {d.lotCode ?? "—"} · {d.reference ?? "—"}</span> : null}
                           <button type="button" className="btn-ghost" style={{ minHeight: 0, padding: "0 4px", color: "var(--err)" }} onClick={() => removeDevice(l.product.id, d.id)} aria-label={`Remove device ${deviceLabel(d)}`}>✕</button>
                         </span>
                       ))}
@@ -257,11 +362,13 @@ export function Pos(props: Props) {
                     <span className="c-label">Qty</span>
                     {l.product.tracked ? (
                       <div className="steps"><button type="button" className="btn-sm" onClick={() => setPicker(l.product)} style={{ width: "100%" }}>{l.qty} · + IMEI</button></div>
+                    ) : l.lots.length > 1 ? (
+                      <div className="steps"><span className="small muted" style={{ padding: "0 8px" }}>{l.qty} (by lot)</span></div>
                     ) : (
                     <div className="steps">
-                      <button type="button" onClick={() => setLine(l.product.id, { qty: Math.max(1, l.qty - 1) })} aria-label="Decrease">−</button>
-                      <input value={l.qty} inputMode="decimal" aria-label="Quantity" onChange={(e) => setLine(l.product.id, { qty: Math.max(0, n(e.target.value)) })} />
-                      <button type="button" onClick={() => setLine(l.product.id, { qty: l.qty + 1 })} aria-label="Increase">+</button>
+                      <button type="button" onClick={() => setQty(l.product.id, Math.max(1, l.qty - 1))} aria-label="Decrease">−</button>
+                      <input value={l.qty} inputMode="decimal" aria-label="Quantity" onChange={(e) => setQty(l.product.id, Math.max(0, n(e.target.value)))} />
+                      <button type="button" onClick={() => setQty(l.product.id, l.qty + 1)} aria-label="Increase">+</button>
                     </div>
                     )}
                   </div>
@@ -287,10 +394,30 @@ export function Pos(props: Props) {
       <section ref={summaryRef} className="panel pos-summary stack" style={{ gap: 12, scrollMarginTop: "calc(var(--topbar-h) + 8px)" }}>
         <h2 style={{ margin: 0 }}>Sale summary</h2>
 
+        {reprice && (
+          <div className="note stack" role="dialog" aria-label="Price changes" style={{ gap: 8, borderColor: "var(--accent)" }}>
+            <strong>Prices change for {reprice.customer?.name ?? "walk-in"} · {(() => { const pl = policyFor(reprice.customer, reprice.override); return pl.tier?.name ?? (pl.adjustmentPct ? `${pl.adjustmentPct}% (${pl.groupName})` : "default price"); })()}</strong>
+            <div className="small" style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: "4px 10px" }}>
+              {reprice.rows.map((r) => (
+                <span key={r.id} style={{ display: "contents" }}>
+                  <span>{r.name}<br /><span style={{ color: r.fallback ? "var(--warn)" : "var(--muted)" }}>{r.rule}</span></span>
+                  <span className="num muted" style={{ textDecoration: r.from !== r.to ? "line-through" : undefined }}>{fmt(r.from)}</span>
+                  <span className="num" style={{ fontWeight: 600 }}>{fmt(r.to)}</span>
+                </span>
+              ))}
+            </div>
+            <span className="small muted">Lots, IMEIs and quantities stay as they are. Prices you changed by hand are replaced.</span>
+            <div className="row">
+              <button className="btn btn-sm" onClick={() => setReprice(null)}>Cancel</button>
+              <button className="btn btn-sm btn-primary" onClick={() => applyPricing(reprice.customer, reprice.override)}>Apply repricing</button>
+            </div>
+          </div>
+        )}
+
         <div className="field">
           <span>Customer</span>
-          {customer ? (
-            <div className="row"><strong style={{ color: "var(--ink)", fontWeight: 500 }}>{customer.name}</strong><span className="muted">{customer.phone}</span>{!!customer.storeCredit && <span className="badge badge-ok">Store credit {fmt(customer.storeCredit)}</span>}<div className="spacer" /><button className="btn btn-sm" onClick={() => setCustomer(null)}>Change</button></div>
+          {customer && !custEditing ? (
+            <div className="row"><strong style={{ color: "var(--ink)", fontWeight: 500 }}>{customer.name}</strong><span className="muted">{customer.phone}</span>{!!customer.storeCredit && <span className="badge badge-ok">Store credit {fmt(customer.storeCredit)}</span>}<div className="spacer" /><button className="btn btn-sm" onClick={() => setCustEditing(true)}>Change</button><button className="btn btn-sm" onClick={() => requestPricing(null, override)}>Walk-in</button></div>
           ) : newCust ? (
             <div className="stack" style={{ gap: 8 }}>
               <input placeholder="Customer name" value={newCust.name} onChange={(e) => setNewCust({ ...newCust, name: e.target.value })} />
@@ -298,7 +425,7 @@ export function Pos(props: Props) {
               <div className="row">
                 <button className="btn btn-sm" onClick={() => setNewCust(null)}>Cancel</button>
                 <button className="btn btn-sm btn-primary" onClick={async () => {
-                  try { setCustomer(await quickAddCustomer(newCust.name, newCust.phone)); setNewCust(null); } catch (e) { setError((e as Error).message); }
+                  try { const c = await quickAddCustomer(newCust.name, newCust.phone); setNewCust(null); setCustEditing(false); requestPricing(c, override); } catch (e) { setError((e as Error).message); }
                 }}>Save customer</button>
               </div>
             </div>
@@ -311,8 +438,8 @@ export function Pos(props: Props) {
               {custHits.length > 0 && (
                 <div className="panel" style={{ position: "absolute", left: 0, right: 0, top: "100%", zIndex: 10, padding: 0 }}>
                   {custHits.map((c) => (
-                    <button key={c.id} className="btn-ghost" style={{ width: "100%", justifyContent: "space-between", borderRadius: 0 }} onClick={() => { setCustomer(c); setCustHits([]); setCustQ(""); }}>
-                      <span>{c.name}</span><span className="muted small">{c.phone}</span>
+                    <button key={c.id} className="btn-ghost" style={{ width: "100%", justifyContent: "space-between", borderRadius: 0 }} onClick={() => { setCustHits([]); setCustQ(""); setCustEditing(false); requestPricing(c, override); }}>
+                      <span>{c.name}{c.pricing?.tier ? <span className="muted small"> · {c.pricing.tier.name}</span> : null}</span><span className="muted small">{c.phone}</span>
                     </button>
                   ))}
                 </div>
@@ -320,6 +447,16 @@ export function Pos(props: Props) {
             </div>
           )}
         </div>
+
+        <label className="field"><span>Price tier</span>
+          <select value={override === undefined ? "__customer" : override ?? "__default"} disabled={!props.canOverrideTier} aria-label="Price tier"
+            onChange={(e) => { const v = e.target.value; requestPricing(customer, v === "__customer" ? undefined : v === "__default" ? null : v); }}>
+            <option value="__customer">{customer?.pricing?.tier ? `${customer.pricing.tier.name} (customer group ${customer.pricing.groupName})` : customer?.pricing?.adjustmentPct ? `Default ${customer.pricing.adjustmentPct > 0 ? "+" : ""}${customer.pricing.adjustmentPct}% (customer group ${customer.pricing.groupName})` : "Default price"}</option>
+            {props.canOverrideTier && (customer?.pricing?.tier || customer?.pricing?.adjustmentPct) && <option value="__default">Default price (override)</option>}
+            {props.tiers.filter((t) => t.allowed && t.id !== (override === undefined ? customer?.pricing?.tier?.id : undefined)).map((t) => <option key={t.id} value={t.id}>{t.name} (override)</option>)}
+          </select>
+          {override !== undefined && <span className="small" style={{ color: "var(--warn)" }}>Tier changed for this sale only.</span>}
+        </label>
 
         <div className="grid2" style={{ gap: 10 }}>
           <label className="field"><span>Commission mode</span>
@@ -385,11 +522,13 @@ export function Pos(props: Props) {
           <button className="btn" onClick={reset} disabled={pending || cart.length === 0}>Clear</button>
           <button className="btn" disabled={pending || cart.length === 0 || cart.some((l) => l.product.tracked)} title="Park this sale and serve the next customer" onClick={() => saveAs("SUSPENDED")}>Suspend</button>
           <button className="btn" disabled={pending || cart.length === 0} onClick={() => saveAs("QUOTE")}>Quote</button>
-          <button className="btn btn-primary" style={{ flex: 1 }} onClick={submit} disabled={pending || cart.length === 0 || (due > 0 && !customer)}>
+          <button className="btn btn-primary" style={{ flex: 1 }} onClick={submit} disabled={pending || cart.length === 0 || (due > 0 && !customer) || !!reprice || cart.some((l) => lotIssue(l))}>
             {pending ? "Completing…" : due > 0 && customer ? `Complete · ${fmt(due)} on credit` : "Complete sale"}
           </button>
         </div>
         {due > 0 && !customer && cart.length > 0 && <p className="small muted" style={{ margin: 0 }}>Collect the full amount, or select a customer to leave a balance on credit.</p>}
+        {cart.some((l) => lotIssue(l) && !lotIssue(l)!.startsWith("Loading")) && <p className="small" style={{ margin: 0, color: "var(--err)" }}>Choose the lot for every item before completing.</p>}
+        {reprice && <p className="small muted" style={{ margin: 0 }}>Apply or cancel the price changes first.</p>}
       </section>
     </div>
   );

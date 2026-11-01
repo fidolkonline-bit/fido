@@ -4,11 +4,13 @@ import { z } from "zod";
 import { posting } from "./db";
 import { D, ZERO, roundTo } from "./money";
 import { nextNumber } from "./numbering";
-import { allocateFifo, allocateDevices, storeCreditBalance, type Pick } from "./stock";
+import { allocateChosenLots, allocateDevices, storeCreditBalance, type Pick } from "./stock";
 import { can } from "./permissions";
 import type { CurrentUser } from "./auth";
 import { attachCheque } from "./payments";
 import { activeRules, ruleFor, perUnitDiscount } from "./discounts";
+import { priceInfo, salePolicy } from "./pricing";
+import { resolvePrice } from "./price-rules";
 
 export const saleInput = z.object({
   idempotencyKey: z.string().min(8).max(80),
@@ -21,11 +23,15 @@ export const saleInput = z.object({
         unitPrice: z.coerce.number().min(0),
         discount: z.coerce.number().min(0).default(0),
         deviceIds: z.array(z.string()).default([]),
+        // Lots chosen at the POS for non-device stock; a split across lots is explicit, one entry per lot.
+        lots: z.array(z.object({ layerId: z.string(), qty: z.coerce.number().positive() })).max(20).default([]),
         discountRuleId: z.string().nullable().default(null),
       }),
     )
     .min(1, "Add at least one item."),
   invoiceDiscount: z.coerce.number().min(0).default(0),
+  // Price tier override for this sale: absent = the customer's policy, null = default price, id = that tier.
+  tierOverride: z.string().nullable().optional(),
   commissionMode: z.enum(["NONE", "USER", "AGENT", "DUAL"]).default("NONE"),
   salespersonId: z.string().nullable().default(null),
   agentId: z.string().nullable().default(null),
@@ -68,6 +74,9 @@ export async function finalizeSale(user: CurrentUser, raw: unknown) {
     });
     const rules = await activeRules(location.id);
     const byId = new Map(products.map((p) => [p.id, p]));
+    // Prices come from the server's own resolution of the tier/customer policy, never from the client.
+    const { policy, basis } = await salePolicy(tx, user, input.customerId, input.tierOverride);
+    const prices = await priceInfo(tx, products);
 
     // Price and discount limits are recalculated on the server, never trusted from the client.
     const override = can(user, "sales.override_price");
@@ -79,6 +88,8 @@ export async function finalizeSale(user: CurrentUser, raw: unknown) {
       if (p.trackDevices && p.stockManaged && !q.eq(l.deviceIds.length))
         throw new SaleError(`Select ${q.toString()} IMEI/serial for ${p.name} (${l.deviceIds.length} selected).`);
       const price = D(l.unitPrice).toDecimalPlaces(2);
+      const resolved = resolvePrice(prices.get(p.id)!, policy);
+      const listPrice = D(resolved.price).toDecimalPlaces(2);
       const discount = D(l.discount).toDecimalPlaces(2);
       const gross = price.mul(q).toDecimalPlaces(2);
       if (discount.gt(gross)) throw new SaleError(`Discount on ${p.name} is more than the line value.`);
@@ -87,14 +98,15 @@ export async function finalizeSale(user: CurrentUser, raw: unknown) {
       if (l.discountRuleId && rule?.id !== l.discountRuleId) throw new SaleError(`The offer on ${p.name} is no longer running. Remove it and add the item again.`);
       const ruleAmount = rule ? perUnitDiscount(rule, p.sellPrice).mul(q) : ZERO;
       if (!override) {
-        if (p.minSellPrice && price.lt(p.minSellPrice) && !rule) throw new SaleError(`${p.name} cannot be sold below ${p.minSellPrice.toFixed(2)}.`);
-        const listGross = D(p.sellPrice).mul(q);
+        // A tier price is configured by authorised staff; only a manual cut below both the rule price and the minimum is blocked.
+        if (p.minSellPrice && price.lt(p.minSellPrice) && price.lt(listPrice) && !rule) throw new SaleError(`${p.name} cannot be sold below ${p.minSellPrice.toFixed(2)}.`);
+        const listGross = listPrice.mul(q);
         const effectiveDiscount = listGross.minus(gross).plus(discount).minus(ruleAmount);
         const maxDiscount = listGross.mul(user.maxDiscountPct).div(100);
         if (effectiveDiscount.gt(maxDiscount.plus(0.005)))
           throw new SaleError(`Discount on ${p.name} is above your limit of ${user.maxDiscountPct.toString()}%.`);
       }
-      return { product: p, qty: q, price, discount, lineTotal: gross.minus(discount), deviceIds: l.deviceIds, ruleId: rule?.id ?? null };
+      return { product: p, qty: q, price, discount, lineTotal: gross.minus(discount), deviceIds: l.deviceIds, lots: l.lots, ruleId: rule?.id ?? null, listPrice, resolved };
     });
 
     const subtotal = lines.reduce((a, l) => a.plus(l.lineTotal), ZERO);
@@ -161,6 +173,9 @@ export async function finalizeSale(user: CurrentUser, raw: unknown) {
         registerId: register.id,
         notes: input.notes,
         idempotencyKey: input.idempotencyKey,
+        priceGroupId: policy.tier?.id ?? null,
+        priceGroupName: policy.tier?.name ?? null,
+        pricingBasis: basis,
       },
     });
 
@@ -184,16 +199,20 @@ export async function finalizeSale(user: CurrentUser, raw: unknown) {
           userShare: p.category?.userShare ?? 0,
           agentShare: p.category?.agentShare ?? 0,
           discountRuleId: l.ruleId,
+          listPrice: l.listPrice,
+          priceRule: l.price.eq(l.listPrice) ? l.resolved.rule : `Manual price (rule: ${l.resolved.rule} ${l.listPrice.toFixed(2)})`,
+          priceGroupId: l.resolved.fallback ? null : l.resolved.tierId,
+          priceGroupName: l.resolved.fallback ? null : l.resolved.tierName,
         },
       });
 
       let costTotal = ZERO;
       if (p.stockManaged) {
         // Overselling is disabled (observed setting), so every unit must come from a cost layer.
-        // Phones take the exact selected devices; everything else is FIFO.
+        // Phones take the exact selected devices; everything else takes the lots the salesperson chose.
         const picks: Pick[] = p.trackDevices
           ? await allocateDevices(tx, p.id, location.id, l.deviceIds)
-          : await allocateFifo(tx, p.id, location.id, l.qty, p.name);
+          : await allocateChosenLots(tx, p.id, location.id, l.qty, l.lots, p.name);
         for (const pick of picks) {
           costTotal = costTotal.plus(pick.qty.mul(pick.unitCost));
           await tx.costAllocation.create({ data: { saleLineId: line.id, costLayerId: pick.layerId, qty: pick.qty, unitCost: pick.unitCost } });

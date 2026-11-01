@@ -31,7 +31,7 @@ export function DevicePicker({ productId, productName, state = "SALEABLE", exclu
         <div style={{ maxHeight: 220, overflowY: "auto" }}>
           {shown.map((d) => (
             <div key={d.id} className="pos-item">
-              <span style={{ fontVariantNumeric: "tabular-nums" }}>{deviceLabel(d)}<small>{d.imei2 ? `IMEI 2 ${d.imei2} · ` : ""}{d.condition.toLowerCase()}</small></span>
+              <span style={{ fontVariantNumeric: "tabular-nums" }}>{deviceLabel(d)}<small>{d.imei2 ? `IMEI 2 ${d.imei2} · ` : ""}{d.condition.toLowerCase()}{d.lotCode || d.reference ? ` · lot ${d.lotCode ?? "—"} · ${d.reference ?? "—"}` : ""}</small></span>
               <button type="button" className="btn btn-sm" onClick={() => onPick(d)}>Add</button>
             </div>
           ))}

@@ -88,6 +88,7 @@ export const NAV: NavGroup[] = [
       { label: "Numbering", href: "/settings/numbering", perm: "settings.manage" },
       { label: "Invoice layouts & printers", href: "/settings/printing", perm: "settings.manage" },
       { label: "Label sizes", href: "/settings/labels", perm: "settings.manage" },
+      { label: "Selling price tiers", href: "/settings/price-groups", perm: "pricing.manage" },
       soon("Tax / service / modifiers", "tax", "D"),
     ],
   },

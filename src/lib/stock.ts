@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { db, type Tx } from "./db";
-import { D } from "./money";
+import { D, ZERO } from "./money";
 
 // Saleable available quantity per product at one location (spec §6.2: available = saleable − reservations).
 export async function availability(locationId: string, productIds?: string[]) {
@@ -45,11 +45,36 @@ export async function allocateFifo(tx: Tx, productId: string, locationId: string
 
 export type Pick = { layerId: string; qty: Prisma.Decimal; unitCost: Prisma.Decimal; deviceId?: string };
 
+// POS: take exactly the lots the salesperson chose (split across lots only when they said so). Each lot is locked and
+// rechecked; a short lot is an error, never quietly topped up from another lot. With no choice sent, only a product
+// with a single eligible lot may proceed. Cost stays each lot's own original cost.
+export async function allocateChosenLots(tx: Tx, productId: string, locationId: string, quantity: Prisma.Decimal, chosen: { layerId: string; qty: number }[], label: string): Promise<Pick[]> {
+  let lots = chosen.map((c) => ({ layerId: c.layerId, qty: D(c.qty) }));
+  if (!lots.length) {
+    const eligible = await tx.costLayer.findMany({ where: { productId, locationId, bucket: "SALEABLE", qtyRemaining: { gt: 0 } }, select: { id: true }, take: 2 });
+    if (!eligible.length) throw new StockError(`No stock of ${label} at this location.`);
+    if (eligible.length > 1) throw new StockError(`Choose which lot of ${label} is being sold.`);
+    lots = [{ layerId: eligible[0].id, qty: quantity }];
+  }
+  if (new Set(lots.map((l) => l.layerId)).size !== lots.length) throw new StockError(`The same lot of ${label} was chosen twice.`);
+  const sum = lots.reduce((a, l) => a.plus(l.qty), ZERO);
+  if (!sum.eq(quantity)) throw new StockError(`Lots chosen for ${label} add up to ${sum.toString()}, not ${quantity.toString()}.`);
+  const picks: Pick[] = [];
+  for (const l of lots) {
+    if (l.qty.lte(0)) throw new StockError(`Each lot of ${label} needs a quantity above 0.`);
+    const layer = await takeFromLayer(tx, l.layerId, l.qty, ["SALEABLE"], { productId, locationId });
+    picks.push({ layerId: layer.id, qty: l.qty, unitCost: layer.unitCost });
+  }
+  return picks;
+}
+
 // Explicit lot choice: take from one named layer, locked, in any bucket the caller permits.
-export async function takeFromLayer(tx: Tx, layerId: string, quantity: Prisma.Decimal, buckets: string[] = ["SALEABLE"]) {
+export async function takeFromLayer(tx: Tx, layerId: string, quantity: Prisma.Decimal, buckets: string[] = ["SALEABLE"], expect?: { productId: string; locationId: string }) {
   const [layer] = await tx.$queryRaw<(Layer & { bucket: string; productId: string; locationId: string; lotCode: string | null })[]>`
     SELECT id, "qtyRemaining", "unitCost", bucket, "productId", "locationId", "lotCode" FROM "CostLayer" WHERE id = ${layerId} FOR UPDATE`;
   if (!layer) throw new StockError("That lot no longer exists.");
+  if (expect && (layer.productId !== expect.productId || layer.locationId !== expect.locationId))
+    throw new StockError(`Lot ${layer.lotCode ?? "(no lot)"} is not stock of this product at this location.`);
   if (!buckets.includes(layer.bucket)) throw new StockError(`Lot ${layer.lotCode ?? ""} is in ${layer.bucket.toLowerCase().replace("_", " ")}, not available here.`);
   if (D(layer.qtyRemaining).lt(quantity)) throw new StockError(`Lot ${layer.lotCode ?? "(no lot)"} has only ${D(layer.qtyRemaining).toString()} left.`);
   await tx.costLayer.update({ where: { id: layerId }, data: { qtyRemaining: { decrement: quantity } } });

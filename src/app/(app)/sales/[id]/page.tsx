@@ -122,6 +122,15 @@ export default async function SaleDetail({ params, searchParams }: { params: Pro
             )}
           </section>
         )}
+        {(sale.pricingBasis || sale.lines.some((l) => l.priceRule)) && (
+          <section className="panel">
+            <h2>Pricing</h2>
+            <p className="small muted" style={{ marginTop: 0 }}>As sold: {sale.pricingBasis ?? "Default price"}. Later price changes do not alter this invoice.</p>
+            {sale.lines.map((l) => (
+              <div className="totalrow small" key={l.id}><span>{l.nameSnapshot}<br /><span className="muted">{l.priceRule ?? "—"}</span></span><strong>{money(l.unitPrice)}{l.listPrice && !D(l.listPrice).eq(l.unitPrice) ? <span className="muted" style={{ fontWeight: 400 }}> (rule {money(l.listPrice)})</span> : null}</strong></div>
+            ))}
+          </section>
+        )}
         {(sale.commissionMode !== "NONE" || showCost) && (
           <section className="grid2">
             {showCost && (

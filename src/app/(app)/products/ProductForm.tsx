@@ -12,8 +12,10 @@ type Product = {
   alertQty: string; stockManaged: boolean; trackDevices: boolean; notForSale: boolean; description: string | null;
 };
 
-export function ProductForm({ product, categories, brands, units, warranties, showCost }: {
-  product?: Product; categories: Opt[]; brands: Opt[]; units: Opt[]; warranties: Opt[]; showCost: boolean;
+type TierPrice = { id: string; name: string; active: boolean; price: string | null; zeroConfirmed: boolean };
+
+export function ProductForm({ product, categories, brands, units, warranties, showCost, tiers, canPrice }: {
+  product?: Product; categories: Opt[]; brands: Opt[]; units: Opt[]; warranties: Opt[]; showCost: boolean; tiers: TierPrice[]; canPrice: boolean;
 }) {
   const [state, action] = useActionState(saveProduct, undefined);
   const p = product;
@@ -46,6 +48,24 @@ export function ProductForm({ product, categories, brands, units, warranties, sh
           <input type="hidden" name="defaultCost" value={p?.defaultCost ?? "0"} />
         )}
       </div>
+
+      {tiers.length > 0 && (
+        <>
+          <h2 style={{ margin: "6px 0 0" }}>Price tiers</h2>
+          <p className="small muted" style={{ margin: 0 }}>Leave a tier empty to sell at the default price in that tier. A 0 is only used as “free” when ticked.{!canPrice && " You can view these; changing them needs pricing rights."}</p>
+          <div className="grid3">
+            {tiers.map((t) => (
+              <div key={t.id} className="field">
+                <span>{t.name}{t.active ? "" : " (inactive)"}</span>
+                <input name={`tier_${t.id}`} type="number" step="0.01" min="0" inputMode="decimal" defaultValue={t.price ?? ""} placeholder="Default price" disabled={!canPrice} aria-label={`${t.name} price`} />
+                {t.price !== null && Number(t.price) === 0 && (
+                  <label className="check small"><input type="checkbox" name={`tierfree_${t.id}`} defaultChecked={t.zeroConfirmed} disabled={!canPrice} /> 0 really means free</label>
+                )}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
 
       <h2 style={{ margin: "6px 0 0" }}>Stock & warranty</h2>
       <div className="grid3">

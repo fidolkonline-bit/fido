@@ -161,13 +161,14 @@ model Session {
 }
 
 model Role {
-  id          String         @id @default(cuid())
-  name        String         @unique
+  id          String             @id @default(cuid())
+  name        String             @unique
   description String?
   permissions String[]
-  system      Boolean        @default(false)
-  createdAt   DateTime       @default(now())
+  system      Boolean            @default(false)
+  createdAt   DateTime           @default(now())
   accounts    LoginAccount[]
+  priceGroups PriceGroupAccess[]
 }
 
 model UserLocation {
@@ -192,10 +193,55 @@ model CommissionProfile {
 // ───────────── Contacts (§5) ─────────────
 
 model CustomerGroup {
-  id        String    @id @default(cuid())
-  name      String    @unique
-  createdAt DateTime  @default(now())
-  contacts  Contact[]
+  id            String      @id @default(cuid())
+  name          String      @unique
+  createdAt     DateTime    @default(now())
+  contacts      Contact[]
+  // Pricing policy: a selling-price group, or else a % adjustment of the default price (−10 = 10% off). Both empty = default price.
+  priceGroupId  String?
+  priceGroup    PriceGroup? @relation(fields: [priceGroupId], references: [id])
+  adjustmentPct Decimal?    @db.Decimal(6, 2)
+}
+
+// Selling-price groups ("price tiers") are configuration, referenced by id so a rename keeps every link.
+// A group used by any sale is deactivated, never deleted (historical pricing stays explained).
+model PriceGroup {
+  id             String             @id @default(cuid())
+  name           String             @unique
+  description    String?
+  active         Boolean            @default(true)
+  sortOrder      Int                @default(0)
+  createdAt      DateTime           @default(now())
+  prices         ProductPrice[]
+  customerGroups CustomerGroup[]
+  access         PriceGroupAccess[]
+  sales          Sale[]
+  saleLines      SaleLine[]
+}
+
+// Roles allowed to choose this tier manually at the POS (with pricing.tier_override). Customer-group tiers apply regardless.
+model PriceGroupAccess {
+  priceGroupId String
+  priceGroup   PriceGroup @relation(fields: [priceGroupId], references: [id], onDelete: Cascade)
+  roleId       String
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([priceGroupId, roleId])
+}
+
+// Product × price group matrix. A 0 price is only used once someone confirms it really means free (legacy 0s are unverified).
+model ProductPrice {
+  id            String     @id @default(cuid())
+  productId     String
+  product       Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
+  priceGroupId  String
+  priceGroup    PriceGroup @relation(fields: [priceGroupId], references: [id], onDelete: Cascade)
+  price         Decimal    @db.Decimal(14, 2)
+  zeroConfirmed Boolean    @default(false)
+  updatedAt     DateTime   @updatedAt
+
+  @@unique([productId, priceGroupId])
+  @@index([priceGroupId])
 }
 
 model Contact {
@@ -317,6 +363,7 @@ model Product {
   claimLines SupplierClaimLine[]
 
   repairParts RepairPart[]
+  prices      ProductPrice[]
 
   @@index([name])
   @@index([barcode])
@@ -574,6 +621,11 @@ model Sale {
   register       RegisterSession? @relation(fields: [registerId], references: [id])
   notes          String?
   idempotencyKey String?          @unique
+  // Pricing snapshot: the tier in force and why (customer group, manual override by whom, or default).
+  priceGroupId   String?
+  priceGroup     PriceGroup?      @relation(fields: [priceGroupId], references: [id], onDelete: Restrict)
+  priceGroupName String?
+  pricingBasis   String?
   soldAt         DateTime         @default(now())
   createdAt      DateTime         @default(now())
   lines          SaleLine[]
@@ -612,6 +664,12 @@ model SaleLine {
   returnLines    SaleReturnLine[]
   devices        DeviceIdentity[]
   discountRuleId String?
+  // Price snapshot: the rule price before any manual change, the rule that supplied it, and the tier (name kept as sold).
+  listPrice      Decimal?            @db.Decimal(14, 2)
+  priceRule      String?
+  priceGroupId   String?
+  priceGroup     PriceGroup?         @relation(fields: [priceGroupId], references: [id], onDelete: Restrict)
+  priceGroupName String?
 }
 
 model CostAllocation {

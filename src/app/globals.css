@@ -318,3 +318,10 @@ table.dt { width: 100%; border-collapse: collapse; font-size: 13px; }
 .checklist .muted { overflow-wrap: anywhere; }
 
 .pager { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 12px; flex-wrap: wrap; }
+
+/* POS lot choice */
+.lot-pick { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; font-size: 12.5px; }
+.lot-pick select { min-height: 34px; font-size: 12.5px; max-width: 100%; }
+.lot-row { display: flex; gap: 6px; align-items: center; }
+.lot-row select { flex: 1; min-width: 0; }
+.lot-row input { width: 64px; min-height: 34px; text-align: right; }

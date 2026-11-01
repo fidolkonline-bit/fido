@@ -8,6 +8,7 @@ import { formError } from "@/lib/forms";
 import { enqueueSms, kickSms } from "@/lib/sms";
 import { closeDraft } from "@/lib/drafts";
 import { money } from "@/lib/money";
+import { customerPolicy } from "@/lib/pricing";
 
 export async function completeSale(payload: unknown): Promise<{ id?: string; number?: string; change?: string; error?: string }> {
   const user = await requirePermission("sales.create");
@@ -44,7 +45,8 @@ export async function searchCustomers(q: string) {
     where: { isCustomer: true, active: true, OR: [{ name: { contains: term, mode: "insensitive" } }, { phone: { contains: term } }] },
     take: 10, orderBy: { name: "asc" }, select: { id: true, name: true, phone: true },
   });
+  const policies = await Promise.all(rows.map((r) => customerPolicy(db, r.id)));
   const credit = await db.storeCreditEntry.groupBy({ by: ["contactId"], where: { contactId: { in: rows.map((r) => r.id) } }, _sum: { amount: true } });
   const creditOf = new Map(credit.map((c) => [c.contactId, Number(c._sum.amount ?? 0)]));
-  return rows.map((r) => ({ ...r, storeCredit: creditOf.get(r.id) ?? 0 }));
+  return rows.map((r, i) => ({ ...r, storeCredit: creditOf.get(r.id) ?? 0, pricing: policies[i] }));
 }
