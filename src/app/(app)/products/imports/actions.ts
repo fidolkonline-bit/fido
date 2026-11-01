@@ -7,7 +7,7 @@ import { requirePermission } from "@/lib/auth";
 import { dryRun, commitBatch } from "@/lib/imports";
 import { formError } from "@/lib/forms";
 
-export async function startImport(payload: { kind: "PRODUCTS" | "OPENING_STOCK"; fileName: string; text: string; existing: "UPDATE" | "SKIP" }): Promise<{ error?: string }> {
+export async function startImport(payload: { kind: "PRODUCTS" | "OPENING_STOCK" | "CONTACTS" | "CATEGORIES"; fileName: string; text: string; existing: "UPDATE" | "SKIP" }): Promise<{ error?: string }> {
   const user = await requirePermission("imports.run");
   let id: string;
   try {

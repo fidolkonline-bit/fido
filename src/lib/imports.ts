@@ -32,6 +32,8 @@ export function parseCsv(text: string): Record<string, string>[] {
 }
 
 export const TEMPLATES = {
+  CONTACTS: "type,code,name,phone,email,address,group,credit_limit,pay_terms_days,opening_balance,tax_number\ncustomer,C-0001,Nimal Perera,0771234567,,Kandy,Retail,10000,30,2500,\nsupplier,S-0001,ABC Accessories,0112345678,,Colombo,,,,15000,\n",
+  CATEGORIES: "legacy_id,name,parent,pool_rate,user_share,agent_share\n101,Back Covers,,9,22.22,77.78\n102,Charging Docks,,3,33,66\n",
   PRODUCTS: "sku,name,category,brand,unit,sell_price,min_price,cost,alert_qty,barcode,track_imei\nD-301,Tempered glass iPhone 15,Screen Guards,Generic,Pieces,750,,250,5,,no\n",
   OPENING_STOCK: "sku,qty,unit_cost,lot,imei,imei2,serial,condition\nD-301,25,250,OPEN-2026,,,,\nD-201,1,52000,OPEN-2026,356789012345678,,,new\n",
 } as const;
@@ -41,7 +43,9 @@ const num = (v: string) => (v === "" ? null : Number(v.replace(/,/g, "")));
 const yes = (v: string) => /^(y|yes|true|1)$/i.test(v);
 
 // Dry run: validate every row against the live catalog and store the verdict. Nothing else is written.
-export async function dryRun(user: CurrentUser, kind: "PRODUCTS" | "OPENING_STOCK", fileName: string, text: string, existing: "UPDATE" | "SKIP") {
+export type ImportKind = "PRODUCTS" | "OPENING_STOCK" | "CONTACTS" | "CATEGORIES";
+
+export async function dryRun(user: CurrentUser, kind: ImportKind, fileName: string, text: string, existing: "UPDATE" | "SKIP") {
   const rows = parseCsv(text);
   if (!rows.length) throw new ImportError("The file has no data rows (the first row must be the column headings).");
   if (rows.length > 5000) throw new ImportError("Import at most 5,000 rows per file.");
@@ -66,6 +70,42 @@ export async function dryRun(user: CurrentUser, kind: "PRODUCTS" | "OPENING_STOC
       const exists = existingSkus.has(r.sku);
       if (exists && existing === "SKIP") return results.push({ line, status: "SKIP", message: `SKU ${r.sku} already exists`, data: r });
       results.push({ line, status: "OK", action: exists ? "update" : "create", data: r });
+    });
+  } else if (kind === "CONTACTS") {
+    if (!("name" in rows[0])) throw new ImportError("Column name is required. Download the template.");
+    const codes = rows.map((r) => r.code).filter(Boolean);
+    const existingCodes = new Set((await db.contact.findMany({ where: { code: { in: codes } }, select: { code: true } })).map((c) => c.code));
+    const seen = new Set<string>();
+    rows.forEach((r, i) => {
+      const line = i + 2;
+      const errs: string[] = [];
+      const type = (r.type || "customer").toLowerCase();
+      if (!["customer", "supplier", "both"].includes(type)) errs.push("type must be customer, supplier or both");
+      if (!r.name) errs.push("name is empty");
+      if (r.code && seen.has(r.code)) errs.push(`code ${r.code} appears twice in this file`);
+      if (r.code) seen.add(r.code);
+      for (const k of ["credit_limit", "pay_terms_days", "opening_balance"]) { const v = num(r[k] ?? ""); if (v !== null && !Number.isFinite(v)) errs.push(`${k} is not a number`); }
+      if (errs.length) return results.push({ line, status: "ERROR", message: errs.join("; "), data: r });
+      const exists = !!r.code && existingCodes.has(r.code);
+      if (exists && existing === "SKIP") return results.push({ line, status: "SKIP", message: `code ${r.code} already exists`, data: r });
+      results.push({ line, status: "OK", action: exists ? "update" : "create", data: r });
+    });
+  } else if (kind === "CATEGORIES") {
+    if (!("name" in rows[0]) || !("pool_rate" in rows[0])) throw new ImportError("Columns name and pool_rate are required. Download the template.");
+    const seen = new Set<string>();
+    rows.forEach((r, i) => {
+      const line = i + 2;
+      const errs: string[] = [];
+      const pool = num(r.pool_rate ?? ""), u = num(r.user_share ?? "") ?? 0, a = num(r.agent_share ?? "") ?? 0;
+      if (!r.name) errs.push("name is empty");
+      if (pool === null || !Number.isFinite(pool) || pool < 0 || pool > 100) errs.push("pool_rate must be 0–100 (percent)");
+      if (![u, a].every((x) => Number.isFinite(x) && x >= 0 && x <= 100)) errs.push("shares must be 0–100 (percent of the pool)");
+      if (r.legacy_id && seen.has(r.legacy_id)) errs.push(`legacy_id ${r.legacy_id} appears twice`);
+      if (r.legacy_id) seen.add(r.legacy_id);
+      if (errs.length) return results.push({ line, status: "ERROR", message: errs.join("; "), data: r });
+      // Do not normalise legacy share totals (e.g. 33% + 66% = 99%): import as-is and flag (spec §9.2).
+      const warn = u + a > 0 && Math.abs(u + a - 100) > 0.01 ? `shares total ${u + a}% — imported as-is, review the rule` : undefined;
+      results.push({ line, status: "OK", action: "create or update", message: warn, data: r });
     });
   } else {
     if (!user.location) throw new ImportError("No location assigned for opening stock.");
@@ -156,6 +196,32 @@ export async function commitBatch(user: CurrentUser, batchId: string) {
       for (const r of ok.filter((x) => x.action === "update")) {
         const d = r.data as Record<string, string>;
         await tx.product.update({ where: { sku: d.sku }, data: fields(d) });
+      }
+    } else if (batch.kind === "CONTACTS") {
+      for (const r of ok) {
+        const d = r.data as Record<string, string>;
+        const type = (d.type || "customer").toLowerCase();
+        let groupId: string | null = null;
+        if (d.group) groupId = (await tx.customerGroup.upsert({ where: { name: d.group }, update: {}, create: { name: d.group } })).id;
+        const data = {
+          name: d.name, isCustomer: type !== "supplier", isSupplier: type !== "customer", phone: d.phone || null, email: d.email || null, address: d.address || null,
+          taxNumber: d.tax_number || null, groupId, creditLimit: num(d.credit_limit ?? "") ?? null, payTermDays: num(d.pay_terms_days ?? "") ?? null,
+          openingBalance: D(num(d.opening_balance ?? "") ?? 0),
+        };
+        if (d.code && r.action === "update") await tx.contact.update({ where: { code: d.code }, data });
+        else await tx.contact.create({ data: { ...data, code: d.code || null } });
+      }
+    } else if (batch.kind === "CATEGORIES") {
+      const rows = ok.map((r) => r.data as Record<string, string>);
+      // Parents first so children can link to them.
+      for (const pass of [false, true]) {
+        for (const d of rows.filter((x) => !!x.parent === pass)) {
+          const parent = d.parent ? await tx.category.findFirst({ where: { name: { equals: d.parent, mode: "insensitive" }, parentId: null } }) : null;
+          const data = { name: d.name, parentId: parent?.id ?? null, poolRate: D(num(d.pool_rate)!).div(100), userShare: D(num(d.user_share ?? "") ?? 0).div(100), agentShare: D(num(d.agent_share ?? "") ?? 0).div(100), legacyId: d.legacy_id || null };
+          const found = d.legacy_id ? await tx.category.findFirst({ where: { legacyId: d.legacy_id } }) : await tx.category.findFirst({ where: { name: { equals: d.name, mode: "insensitive" }, parentId: data.parentId } });
+          if (found) await tx.category.update({ where: { id: found.id }, data });
+          else await tx.category.create({ data });
+        }
       }
     } else {
       const locationId = batch.locationId!;

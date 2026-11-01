@@ -33,6 +33,7 @@ export const NAV: NavGroup[] = [
       { label: "Phone / device identities", href: "/products/devices", perm: "products.view" },
       { label: "Print labels", href: "/products/labels", perm: "products.view" },
       { label: "Imports & opening stock", href: "/products/imports", perm: "imports.run" },
+      { label: "Cutover checklist", href: "/products/imports/cutover", perm: "imports.run" },
     ],
   },
   {
@@ -70,7 +71,15 @@ export const NAV: NavGroup[] = [
       { label: "Cheques", href: "/accounts/cheques", perm: "accounts.view" },
     ],
   },
-  { key: "reports", label: "Reports", items: [{ label: "Reports", href: "/reports", perm: "reports.view" }] },
+  {
+    key: "reports", label: "Reports",
+    items: [
+      { label: "All reports", href: "/reports", perm: "reports.view" },
+      { label: "Profit / Loss", href: "/reports/profit-loss", perm: "reports.view" },
+      { label: "Stock", href: "/reports/stock", perm: "reports.view" },
+      { label: "Customers / Suppliers", href: "/reports/customers-suppliers", perm: "reports.view" },
+    ],
+  },
   { key: "notifications", label: "Notification Templates", items: [{ label: "SMS log & templates", href: "/notifications", perm: "notifications.manage" }] },
   {
     key: "settings", label: "Settings",

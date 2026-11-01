@@ -17,12 +17,12 @@ export default async function ImportReview({ params, searchParams }: { params: P
   const { show = "problems" } = await searchParams;
   const rows = b.rows as unknown as Row[];
   const s = b.summary as { total: number; ok: number; errors: number; skipped: number };
-  const shown = show === "all" ? rows : rows.filter((r) => r.status !== "OK");
-  const label = (r: Row) => String(r.data?.sku ?? "") + (r.data?.name ? ` · ${r.data.name}` : "") + (r.data?.imei ? ` · IMEI ${r.data.imei}` : "") + (r.data?.qty ? ` · qty ${r.data.qty}` : "");
+  const shown = show === "all" ? rows : rows.filter((r) => r.status !== "OK" || r.message);
+  const label = (r: Row) => String(r.data?.sku ?? r.data?.code ?? r.data?.legacy_id ?? "") + (r.data?.name ? ` · ${r.data.name}` : "") + (r.data?.imei ? ` · IMEI ${r.data.imei}` : "") + (r.data?.qty ? ` · qty ${r.data.qty}` : "");
 
   return (
     <div className="stack">
-      <PageHead eyebrow={`Products / Imports / ${b.kind === "PRODUCTS" ? "Products" : "Opening stock"}`} title={b.fileName}
+      <PageHead eyebrow={`Products / Imports / ${({ PRODUCTS: "Products", OPENING_STOCK: "Opening stock", CONTACTS: "Contacts", CATEGORIES: "Categories" } as Record<string, string>)[b.kind]}`} title={b.fileName}
         actions={<Badge tone={b.status === "COMMITTED" ? "ok" : b.status === "DRY_RUN" ? "warn" : "muted"}>{b.status === "DRY_RUN" ? "Dry run — nothing saved yet" : b.status.toLowerCase()}</Badge>} />
       <div className="stats">
         <Stat label="Rows in file" value={s.total} basis={`Checked ${fmtDateTime(b.createdAt)}`} />
@@ -45,7 +45,7 @@ export default async function ImportReview({ params, searchParams }: { params: P
       <DataTable rows={shown.slice(0, 500)} rowKey={(r) => String(r.line)} empty="No problems — every row is valid."
         columns={[
           { label: "Line", primary: true, render: (r) => `Row ${r.line}` },
-          { label: "Result", render: (r) => <Badge tone={r.status === "OK" ? "ok" : r.status === "ERROR" ? "err" : "muted"}>{r.status === "OK" ? r.action : r.status.toLowerCase()}</Badge> },
+          { label: "Result", render: (r) => <Badge tone={r.status === "OK" ? (r.message ? "warn" : "ok") : r.status === "ERROR" ? "err" : "muted"}>{r.status === "OK" ? r.action : r.status.toLowerCase()}</Badge> },
           { label: "Row", render: (r) => label(r) || "—" },
           { label: "Problem", render: (r) => r.message ?? "" },
         ]} />

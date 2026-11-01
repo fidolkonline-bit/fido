@@ -60,6 +60,8 @@ Supabase's public REST API; the app reaches Postgres only through Prisma.
 | `src/lib/numbering.ts` | Concurrency-safe document numbers (`INV2026/0001`, `PO2026/0001`, …) |
 | `src/lib/auth.ts` | DB-backed sessions (revocable), server-side permission guards |
 | `src/lib/permissions.ts` | Permission keys and default roles |
+| `src/lib/reports/` | Report definitions (`sales`, `stock`, `money`, `ops`), filters, CSV |
+| `src/lib/imports.ts` | CSV dry run / commit for products, opening stock, contacts, categories |
 | `src/lib/nav.ts` | Full navigation; unbuilt screens are marked with their delivery phase |
 | `src/app/(app)/…` | Screens (each route folder = one screen family) |
 
@@ -119,6 +121,19 @@ payment accounts, first reports, settings.
 - Sales targets (flat / progressive bands) paid once through payroll, separate from commission.
 - Essentials: noticeboard, reminders that ring as tasks, private staff messages, knowledge base with revisions,
   documents (≤ 4 MB, role-restricted downloads).
+
+**Phase E (complete):**
+- Reports — all 36 (RP-01 … RP-36) in one catalogue at `/reports`, each with its basis stated, period and
+  location filters, totals over every row, drill-through to the source document, CSV export and print. Cost
+  columns are removed on the server for users without cost permission (screen and CSV alike).
+- Profit / Loss counts each thing once: net sales − lot COGS + repair margin − expenses − payroll − commission −
+  targets − wastage − supplier-claim losses. Stock, receivables/payables and commission figures agree across
+  reports (checked by script).
+- Migration — CSV imports for customers/suppliers (codes, groups, credit limits, opening balances) and categories
+  with commission rates (legacy ids kept; share totals other than 100% imported as-is and flagged), alongside the
+  product and opening-stock imports. Cutover checklist (`/products/imports/cutover`): data loaded, figures to
+  reconcile with Clicky, items to investigate, next document numbers, go-live gates.
+- Waiting on Clicky: full sales/purchase history import needs a real export or read-only database access.
 
 Before the first live payroll: set up EPF/ETF, tax and any overtime / holiday-pay rules as pay components and
 check them against approved sample payslips (spec §26).
