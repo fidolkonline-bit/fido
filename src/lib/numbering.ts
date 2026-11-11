@@ -19,6 +19,9 @@ const DEFAULT_PREFIX: Record<string, string> = {
   SUSPENDED: "SUS",
   SUBSCRIPTION: "SUB",
   DEBT_RECEIPT: "RCP",
+  TRADE_IN: "TRD",
+  STOCK_COUNT: "SC",
+  INSTALMENT: "IP",
 };
 
 // Allocates a unique final document number inside the posting transaction (spec §15.2).

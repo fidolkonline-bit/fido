@@ -1,3 +1,4 @@
+import { imeiProblem } from "./imei";
 import "server-only";
 import { Prisma } from "@prisma/client";
 import { db, posting } from "./db";
@@ -169,7 +170,7 @@ export async function dryRun(user: CurrentUser, kind: ImportKind, fileName: stri
       if (p?.trackDevices) {
         if (qty !== 1) errs.push("IMEI-tracked products need one row per device (qty 1)");
         if (!r.imei && !r.serial) errs.push("IMEI or serial is required for this product");
-        if (r.imei && !/^\d{14,17}$/.test(r.imei)) errs.push("IMEI must be 14–17 digits");
+        for (const m of [imeiProblem(r.imei), imeiProblem(r.imei2, "IMEI 2")]) if (m) errs.push(m.replace(/\.$/, ""));
         if (r.imei && inStock.has(r.imei)) errs.push(`IMEI ${r.imei} is already in stock`);
         if (r.imei && seenImei.has(r.imei)) errs.push(`IMEI ${r.imei} appears twice in this file`);
         if (r.imei) seenImei.add(r.imei);

@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { searchProducts, type ProductHit } from "@/app/(app)/search";
+import { ScanButton } from "./CameraScan";
 
 // Search box that resolves to one product; used by adjustments, transfers and receiving.
 export function ProductSearch({ onPick, placeholder = "Scan or search product to add", forSale = false }: { onPick: (p: ProductHit) => void; placeholder?: string; forSale?: boolean }) {
@@ -19,9 +20,15 @@ export function ProductSearch({ onPick, placeholder = "Scan or search product to
     }, 180);
   };
   const pick = (p: ProductHit) => { seq.current++; setQ(""); setHits([]); onPick(p); };
+  // Camera scan behaves like a hardware scanner: an exact barcode / SKU / IMEI match is picked straight away.
+  const scanned = async (code: string) => {
+    const r = await searchProducts(code, forSale);
+    const exact = r.find((h) => h.device) ?? r.find((h) => h.sku.toLowerCase() === code.toLowerCase() || h.barcode === code) ?? (r.length === 1 ? r[0] : null);
+    if (exact) pick(exact); else { setQ(code); setHits(r); }
+  };
   return (
-    <div style={{ position: "relative" }}>
-      <input value={q} onChange={(e) => run(e.target.value)} placeholder={placeholder} aria-label="Find product" autoComplete="off"
+    <div style={{ position: "relative", display: "flex", gap: 6 }}>
+      <input style={{ flex: 1 }} value={q} onChange={(e) => run(e.target.value)} placeholder={placeholder} aria-label="Find product" autoComplete="off"
         onKeyDown={async (e) => {
           if (e.key !== "Enter") return;
           e.preventDefault();
@@ -29,6 +36,7 @@ export function ProductSearch({ onPick, placeholder = "Scan or search product to
           const exact = r.find((h) => h.device) ?? r.find((h) => h.sku.toLowerCase() === q.trim().toLowerCase() || h.barcode === q.trim()) ?? (r.length === 1 ? r[0] : null);
           if (exact) pick(exact); else setHits(r);
         }} />
+      <ScanButton onCode={scanned} label="Scan with camera" />
       {hits.length > 0 && (
         <div className="panel" style={{ position: "absolute", left: 0, right: 0, top: "100%", zIndex: 10, padding: 0, maxHeight: 280, overflowY: "auto" }}>
           {hits.map((h) => (

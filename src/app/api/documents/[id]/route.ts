@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { canSee } from "@/lib/essentials";
+import { FILES_BUCKET, getFile } from "@/lib/storage";
 
 // Downloads are checked against the document's audience on every request (§19).
 export async function GET(_: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -10,7 +11,9 @@ export async function GET(_: Request, { params }: { params: Promise<{ id: string
   const doc = await db.documentFile.findUnique({ where: { id: (await params).id } });
   if (!doc || (!canSee(doc.audience, user.role) && !user.permissions.has("essentials.manage"))) return NextResponse.json({ error: "not found" }, { status: 404 });
   await db.auditEvent.create({ data: { actorId: user.personId, action: "DOCUMENT_DOWNLOADED", subjectType: "DocumentFile", subjectId: doc.id } });
-  return new NextResponse(new Uint8Array(doc.data), {
+  const bytes = doc.storagePath ? await getFile(FILES_BUCKET, doc.storagePath).catch(() => null) : doc.data;
+  if (!bytes) return NextResponse.json({ error: "file missing from storage" }, { status: 502 });
+  return new NextResponse(new Uint8Array(bytes), {
     headers: {
       "Content-Type": doc.mimeType,
       "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(doc.name)}`,

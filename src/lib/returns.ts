@@ -242,6 +242,13 @@ export async function postReturn(user: CurrentUser, raw: unknown) {
       where: { id: sale.id },
       data: { paid, credited, paymentState: dueAfter.lte(0) ? "PAID" : paid.gt(0) ? "PARTIAL" : "DUE" },
     });
+    // Loyalty points earned on the returned value are taken back (never more than the sale earned).
+    if (sale.customerId && sale.loyaltyEarned > 0 && D(sale.total).gt(0)) {
+      const already = await tx.loyaltyEntry.aggregate({ where: { sourceType: "SaleReturn", reference: sale.number }, _sum: { points: true } });
+      const left = sale.loyaltyEarned + (already._sum.points ?? 0);
+      const back = Math.min(left, Math.round(D(totalValue).div(sale.total).mul(sale.loyaltyEarned).toNumber()));
+      if (back > 0) await tx.loyaltyEntry.create({ data: { contactId: sale.customerId, points: -back, sourceType: "SaleReturn", sourceId: ret.id, reference: sale.number } });
+    }
     await tx.saleReturn.update({ where: { id: ret.id }, data: { totalValue, debtOffset, refunded, storeCredit, settlement: excess.gt(0) ? input.settlement : "DEBT_ONLY" } });
     await tx.auditEvent.create({
       data: { actorId: user.personId, action: "RETURN_COMPLETED", subjectType: "SaleReturn", subjectId: ret.id, detail: { number, sale: sale.number, value: totalValue.toString() } },

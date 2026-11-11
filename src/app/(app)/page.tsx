@@ -3,6 +3,19 @@ import { requireUser, can } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { D, money, qty, colomboDayStart, fmtDateTime } from "@/lib/money";
 import { availability } from "@/lib/stock";
+import { unstable_cache } from "next/cache";
+import { latestBackup, storageConfigured } from "@/lib/storage";
+
+const backupHealth = unstable_cache(async () => {
+  if (!storageConfigured()) return "Automatic backups are not set up yet.";
+  try {
+    const b = await latestBackup();
+    if (!b?.at) return "No database backup has been made yet.";
+    return Date.now() - new Date(b.at).getTime() > 36 * 3_600_000 ? "The last database backup is more than 36 hours old." : null;
+  } catch {
+    return "Backups could not be checked.";
+  }
+}, ["backup-health"], { revalidate: 3600 });
 import { PageHead, DataTable, Stat, Badge, RowLink } from "@/components/ui";
 
 export const metadata = { title: "Home" };
@@ -35,6 +48,8 @@ export default async function Home() {
     .map((p) => ({ ...p, available: stock.get(p.id) ?? D(0) }))
     .filter((p) => p.available.lte(p.alertQty))
     .slice(0, 10);
+  // Owner only: say so on the home screen when the nightly backup is missing or late (checked at most hourly).
+  const backupWarning = can(user, "settings.manage") ? await backupHealth() : null;
   const dues = D(dueAgg._sum.total).minus(D(dueAgg._sum.paid)).minus(D(dueAgg._sum.credited));
 
   return (
@@ -49,6 +64,7 @@ export default async function Home() {
           </>
         }
       />
+      {backupWarning && <p className="note note-err">{backupWarning} <Link href="/settings/backups">Open Backups</Link></p>}
       <div className="stats">
         <Stat label="Sales today" value={`Rs. ${money(salesToday._sum.total)}`} basis={`${salesToday._count} invoices · invoice basis`} />
         <Stat label="Money collected today" value={`Rs. ${money(collectedToday._sum.amount)}`} basis="Payment-date basis" />

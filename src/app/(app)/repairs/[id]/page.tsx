@@ -2,12 +2,16 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requirePermission, can } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { D, money, qty, fmtDateTime } from "@/lib/money";
+import { D, money, qty, fmtDateTime, fmtDate } from "@/lib/money";
 import { REPAIR_STATUS, isOpen } from "@/lib/repairs";
 import { PageHead, DataTable, Badge, RowLink } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
 import { StatusButtons, DiagnosisForm, ChargesForm, PaymentForm, IssuePart, CredentialReveal } from "../JobPanels";
-import { doApprove, doReturnPart, doPurge } from "../actions";
+import { doApprove, doReturnPart, doPurge, removeRepairPhoto } from "../actions";
+import { headers } from "next/headers";
+import { PhotoUpload } from "../PhotoPanel";
+import { WhatsAppLink } from "@/components/WhatsAppLink";
+import { FILES_BUCKET, signedUrl, storageConfigured } from "@/lib/storage";
 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) {
   const j = await db.repairJob.findUnique({ where: { id: (await params).id }, select: { number: true } });
@@ -29,9 +33,15 @@ export default async function RepairJob({ params, searchParams }: { params: Prom
       parts: { include: { product: true }, orderBy: { createdAt: "asc" } },
       payments: { orderBy: { paidAt: "asc" } },
       events: { include: { actor: true }, orderBy: { createdAt: "desc" } },
+      photos: { orderBy: { createdAt: "asc" } },
+      originSaleLine: { include: { sale: { select: { id: true, number: true } } } },
     },
   });
   if (!job) notFound();
+  const storageOn = storageConfigured();
+  const photos = storageOn ? await Promise.all(job.photos.map(async (p) => ({ ...p, url: await signedUrl(FILES_BUCKET, p.storagePath, 600).catch(() => null) }))) : [];
+  const h = await headers();
+  const trackUrl = job.trackToken ? `${h.get("x-forwarded-proto") ?? (/^(localhost|127\.)/.test(h.get("host") ?? "") ? "http" : "https")}://${h.get("host")}/track/${job.trackToken}` : null;
   const { new: isNew } = await searchParams;
   const manage = can(user, "repairs.manage");
   const open = isOpen(job.status);
@@ -52,8 +62,16 @@ export default async function RepairJob({ params, searchParams }: { params: Prom
           <Badge tone={st?.tone ?? "muted"}>{st?.label ?? job.status}</Badge>
           <Link className="btn" href={`/repairs/${job.id}/sticker`}>Job sticker</Link>
           <Link className="btn" href={`/repairs/${job.id}/sticker?bill=1`}>Print bill</Link>
+          <WhatsAppLink phone={job.customer.phone} label="WhatsApp update"
+            text={`${job.customer.name}, your ${[job.deviceBrand, job.deviceModel].filter(Boolean).join(" ")} (job ${job.number}) is now: ${st?.label ?? job.status}.${job.status === "AWAITING_APPROVAL" && job.estimate ? ` Estimate Rs. ${money(job.estimate)} — please reply to approve.` : ""}${job.status === "READY" && due.gt(0) ? ` Balance to pay Rs. ${money(due)}.` : ""}${trackUrl ? ` Track it here: ${trackUrl}` : ""}`} />
         </>} />
-      {isNew && <p className="note note-ok">Job created. Print the job sticker and stick it on the device.</p>}
+      {isNew && <p className="note note-ok">Job created. Print the job sticker and stick it on the device, then add photos of the device below.</p>}
+      {job.originSaleLine && (
+        <p className={"note " + (job.warrantyClaim ? "note-ok" : "")}>
+          {job.warrantyClaim ? "Warranty claim" : "Out-of-warranty repair"} on <RowLink href={`/sales/${job.originSaleLine.sale.id}`}>{job.originSaleLine.sale.number}</RowLink> · {job.originSaleLine.nameSnapshot}
+          {job.originSaleLine.warrantyUntil ? ` · warranty until ${fmtDate(job.originSaleLine.warrantyUntil)}` : ""}
+        </p>
+      )}
 
       <div className="grid3 small">
         <div><span className="muted">Customer</span><br /><RowLink href={`/contacts/${job.customerId}`}>{job.customer.name}</RowLink>{job.customer.phone && <> · <a href={`tel:${job.customer.phone}`}>{job.customer.phone}</a></>}</div>
@@ -63,6 +81,32 @@ export default async function RepairJob({ params, searchParams }: { params: Prom
         <div><span className="muted">Checklist</span><br />SIM × {job.simCount}{job.memoryCard ? " · memory card" : ""}{job.accessories ? ` · ${job.accessories}` : ""}{job.condition && <><br />{job.condition}</>}</div>
         <div><span className="muted">Technician</span><br />{job.technician?.fullName ?? "Not assigned"}</div>
       </div>
+
+      <section className="panel stack">
+        <div className="row"><h2 style={{ margin: 0 }}>Photos</h2><div className="spacer" />{manage && storageOn && <PhotoUpload jobId={job.id} />}</div>
+        {!storageOn && <p className="small muted" style={{ margin: 0 }}>Photos need file storage. The owner switches it on under Settings › Backups &amp; file storage.</p>}
+        {storageOn && !photos.length && <p className="small muted" style={{ margin: 0 }}>No photos yet. Photograph the screen, back and any damage before the device leaves the counter.</p>}
+        {photos.length > 0 && (
+          <div className="row" style={{ flexWrap: "wrap", gap: 10, alignItems: "flex-start" }}>
+            {photos.map((p) => (
+              <figure key={p.id} style={{ margin: 0, width: 132 }}>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                {p.url ? <a href={p.url} target="_blank" rel="noopener noreferrer"><img src={p.url} alt={`${p.kind.toLowerCase()} photo`} loading="lazy" style={{ width: 132, height: 132, objectFit: "cover", borderRadius: 8 }} /></a> : <div className="empty" style={{ height: 132 }}>Unavailable</div>}
+                <figcaption className="small muted row" style={{ gap: 4 }}>
+                  {({ INTAKE: "As received", WORK: "During work", DONE: "After repair" } as Record<string, string>)[p.kind]}
+                  {manage && <form action={removeRepairPhoto} className="no-print"><input type="hidden" name="id" value={p.id} /><button className="btn btn-sm" aria-label="Remove photo">×</button></form>}
+                </figcaption>
+              </figure>
+            ))}
+          </div>
+        )}
+        <div className="small muted">
+          {job.termsAcceptedAt ? <>Terms accepted by the customer on {fmtDateTime(job.termsAcceptedAt)}{job.signature ? " — signed:" : " (no signature)."}</> : "Terms were not accepted on screen for this job."}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          {job.signature && <><br /><img src={job.signature} alt="Customer signature" style={{ height: 64, background: "#fff", borderRadius: 6, marginTop: 4 }} /></>}
+        </div>
+        {trackUrl && <div className="small muted no-print">Customer tracking link (no login, no personal details): <a href={trackUrl} target="_blank" rel="noopener noreferrer">{trackUrl}</a></div>}
+      </section>
 
       {manage && open && (
         <section className="panel stack">

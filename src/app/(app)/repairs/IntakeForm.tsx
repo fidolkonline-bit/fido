@@ -5,17 +5,23 @@ import { submitIntake } from "./actions";
 import { searchCustomers } from "../pos/actions";
 import { quickAddCustomer } from "../contacts/actions";
 import { PatternPad } from "./PatternPad";
+import { SignaturePad } from "@/components/SignaturePad";
+import { ScanButton } from "@/components/CameraScan";
 
 type Customer = { id: string; name: string; phone: string | null };
 const ACCESSORIES = ["Charger", "Cable", "Back cover / case", "Box", "Earphones", "Stylus"];
 
-export function IntakeForm({ technicians }: { technicians: { id: string; name: string }[] }) {
+export type IntakePrefill = { customer: Customer | null; deviceModel: string; imei: string; serial: string; claim: { saleLineId: string; deviceId: string | null; label: string; inWarranty: boolean } | null };
+
+export function IntakeForm({ technicians, terms, prefill }: { technicians: { id: string; name: string }[]; terms: string; prefill?: IntakePrefill }) {
   const [key] = useState(() => crypto.randomUUID());
-  const [customer, setCustomer] = useState<Customer | null>(null);
+  const [customer, setCustomer] = useState<Customer | null>(prefill?.customer ?? null);
+  const [agreed, setAgreed] = useState(false);
+  const [signature, setSignature] = useState<string | null>(null);
   const [custQ, setCustQ] = useState("");
   const [hits, setHits] = useState<Customer[]>([]);
   const [newCust, setNewCust] = useState<{ name: string; phone: string } | null>(null);
-  const [f, setF] = useState({ serviceType: "CARRY_IN", deviceBrand: "", deviceModel: "", imei: "", serial: "", color: "", simCount: "0", memoryCard: false, condition: "", problem: "", technicianId: "", estimate: "", promisedAt: "" });
+  const [f, setF] = useState({ serviceType: "CARRY_IN", deviceBrand: "", deviceModel: prefill?.deviceModel ?? "", imei: prefill?.imei ?? "", serial: prefill?.serial ?? "", color: "", simCount: "0", memoryCard: false, condition: "", problem: "", technicianId: "", estimate: "", promisedAt: "" });
   const [acc, setAcc] = useState<string[]>([]);
   const [credType, setCredType] = useState<"NONE" | "PIN" | "PATTERN" | "PASSWORD">("NONE");
   const [cred, setCred] = useState("");
@@ -40,12 +46,19 @@ export function IntakeForm({ technicians }: { technicians: { id: string; name: s
       accessories: acc.join(", ") || null, condition: f.condition || null, problem: f.problem, credentialType: credType, credential: credType === "NONE" ? null : cred,
       technicianId: f.technicianId || null, estimate: f.estimate === "" ? null : Number(f.estimate), promisedAt: f.promisedAt ? new Date(f.promisedAt) : null,
       deposit: Number(deposit.amount) > 0 ? { amount: Number(deposit.amount), method: deposit.method } : null, notifyCustomer: notify,
+      termsAccepted: agreed, signature: agreed ? signature : null, claimSaleLineId: prefill?.claim?.saleLineId ?? null, claimDeviceId: prefill?.claim?.deviceId ?? null,
     });
     if (r?.error) setError(r.error);
   });
 
   return (
     <div className="stack">
+      {prefill?.claim && (
+        <p className={"note " + (prefill.claim.inWarranty ? "note-ok" : "note-err")}>
+          {prefill.claim.inWarranty ? "Warranty claim" : "Out of warranty"} — {prefill.claim.label}. The job is linked to the original sale.
+          {!prefill.claim.inWarranty && " Charge it as a normal repair."}
+        </p>
+      )}
       <section className="panel stack">
         <h2 style={{ margin: 0 }}>1 · Customer</h2>
         {customer ? (
@@ -78,7 +91,7 @@ export function IntakeForm({ technicians }: { technicians: { id: string; name: s
           <label className="field"><span>Brand</span><input value={f.deviceBrand} onChange={(e) => set("deviceBrand", e.target.value)} placeholder="Samsung" /></label>
           <label className="field"><span>Model *</span><input value={f.deviceModel} onChange={(e) => set("deviceModel", e.target.value)} placeholder="Galaxy A15" /></label>
           <label className="field"><span>Colour</span><input value={f.color} onChange={(e) => set("color", e.target.value)} /></label>
-          <label className="field"><span>IMEI</span><input value={f.imei} onChange={(e) => set("imei", e.target.value)} inputMode="numeric" /></label>
+          <label className="field"><span>IMEI</span><span className="row" style={{ flexWrap: "nowrap" }}><input value={f.imei} onChange={(e) => set("imei", e.target.value)} inputMode="numeric" /><ScanButton onCode={(c) => set("imei", c.replace(/\D/g, ""))} label="Scan IMEI" /></span></label>
           <label className="field"><span>Serial</span><input value={f.serial} onChange={(e) => set("serial", e.target.value)} /></label>
           <label className="field"><span>Service</span>
             <select value={f.serviceType} onChange={(e) => set("serviceType", e.target.value)}><option value="CARRY_IN">Carry-in</option><option value="PICKUP">Pickup</option><option value="ON_SITE">On-site</option></select>
@@ -113,6 +126,14 @@ export function IntakeForm({ technicians }: { technicians: { id: string; name: s
           {Number(deposit.amount) > 0 && <label className="field"><span>Paid by</span><select value={deposit.method} onChange={(e) => setDeposit({ ...deposit, method: e.target.value })}><option value="CASH">Cash</option><option value="CARD">Card</option><option value="BANK_TRANSFER">Bank transfer</option></select></label>}
         </div>
         <label className="check"><input type="checkbox" checked={notify} onChange={(e) => setNotify(e.target.checked)} /> SMS the job number to the customer</label>
+      </section>
+
+      <section className="panel stack">
+        <h2 style={{ margin: 0 }}>5 · Terms and signature</h2>
+        <p className="small" style={{ margin: 0, whiteSpace: "pre-line" }}>{terms}</p>
+        <label className="check"><input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} /> The customer has read (or been told) and accepts these terms</label>
+        {agreed && <SignaturePad onChange={setSignature} />}
+        <p className="small muted" style={{ margin: 0 }}>The terms as shown now are saved with the job and printed on the bill. Photos of the device are added on the next screen.</p>
         {error && <p className="note note-err" role="alert">{error}</p>}
         <div className="form-actions" style={{ marginTop: 0 }}><button className="btn btn-primary" disabled={pending || !customer || !f.deviceModel || !f.problem} onClick={submit}>{pending ? "Saving…" : "Create job"}</button></div>
       </section>

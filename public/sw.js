@@ -3,7 +3,7 @@
    Deliberately caches no pages, API answers or server actions: stock, money and tasks always come live from
    the server (spec §23), and a shared shop device must not keep one person's screens for the next. */
 
-const VERSION = "fido-sw-1";
+const VERSION = "fido-sw-2";
 const SHELL = `${VERSION}-shell`;
 const OFFLINE_URL = "/offline.html";
 const SHELL_FILES = [OFFLINE_URL, "/icons/icon-192.png", "/icons/badge-96.png"];

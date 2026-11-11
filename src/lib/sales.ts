@@ -12,6 +12,8 @@ import { activeRules, ruleFor, perUnitDiscount } from "./discounts";
 import { priceInfo, salePolicy } from "./pricing";
 import { resolvePrice } from "./price-rules";
 import { debtOf } from "./debt";
+import { checkDiscountLimits } from "./discount-limits";
+import { getLoyalty, pointsFor } from "./loyalty";
 
 export const saleInput = z.object({
   idempotencyKey: z.string().min(8).max(80),
@@ -71,8 +73,11 @@ export async function finalizeSale(user: CurrentUser, raw: unknown) {
     const business = await tx.business.findFirstOrThrow();
     const products = await tx.product.findMany({
       where: { id: { in: input.lines.map((l) => l.productId) }, active: true },
-      include: { category: true },
+      include: { category: true, warranty: true, taxRate: true },
     });
+    // Tax is off until the business switches it on. Prices include tax: it is worked out of each line, never added on top.
+    const defaultTax = business.taxEnabled ? await tx.taxRate.findFirst({ where: { isDefault: true, active: true } }) : null;
+    const soldAt = new Date();
     const rules = await activeRules(location.id);
     const byId = new Map(products.map((p) => [p.id, p]));
     // Prices come from the server's own resolution of the tier/customer policy, never from the client.
@@ -98,23 +103,21 @@ export async function finalizeSale(user: CurrentUser, raw: unknown) {
       const rule = l.discountRuleId ? ruleFor(rules, p) : null;
       if (l.discountRuleId && rule?.id !== l.discountRuleId) throw new SaleError(`The offer on ${p.name} is no longer running. Remove it and add the item again.`);
       const ruleAmount = rule ? perUnitDiscount(rule, p.sellPrice).mul(q) : ZERO;
-      if (!override) {
-        // A tier price is configured by authorised staff; only a manual cut below both the rule price and the minimum is blocked.
-        if (p.minSellPrice && price.lt(p.minSellPrice) && price.lt(listPrice) && !rule) throw new SaleError(`${p.name} cannot be sold below ${p.minSellPrice.toFixed(2)}.`);
-        const listGross = listPrice.mul(q);
-        const effectiveDiscount = listGross.minus(gross).plus(discount).minus(ruleAmount);
-        const maxDiscount = listGross.mul(user.maxDiscountPct).div(100);
-        if (effectiveDiscount.gt(maxDiscount.plus(0.005)))
-          throw new SaleError(`Discount on ${p.name} is above your limit of ${user.maxDiscountPct.toString()}%.`);
-      }
-      return { product: p, qty: q, price, discount, lineTotal: gross.minus(discount), deviceIds: l.deviceIds, lots: l.lots, ruleId: rule?.id ?? null, listPrice, resolved };
+      return { product: p, qty: q, price, discount, lineTotal: gross.minus(discount), deviceIds: l.deviceIds, lots: l.lots, ruleId: rule?.id ?? null, listPrice, resolved, ruleAmount, hasRule: !!rule };
     });
 
     const subtotal = lines.reduce((a, l) => a.plus(l.lineTotal), ZERO);
     const invoiceDiscount = D(input.invoiceDiscount).toDecimalPlaces(2);
     if (invoiceDiscount.gt(subtotal)) throw new SaleError("Invoice discount is more than the subtotal.");
-    if (!override && subtotal.gt(0) && invoiceDiscount.gt(subtotal.mul(user.maxDiscountPct).div(100).plus(0.005)))
-      throw new SaleError(`Invoice discount is above your limit of ${user.maxDiscountPct.toString()}%.`);
+    // One allowance for the whole sale: line cuts, line discounts and the invoice discount cannot be stacked,
+    // and the minimum price is tested on the net unit price after every discount.
+    if (!override) {
+      const problem = checkDiscountLimits(
+        lines.map((l) => ({ name: l.product.name, qty: l.qty, price: l.price, listPrice: l.listPrice, discount: l.discount, ruleAmount: l.ruleAmount, hasRule: l.hasRule, minSellPrice: l.product.minSellPrice })),
+        invoiceDiscount, user.maxDiscountPct,
+      );
+      if (problem) throw new SaleError(problem);
+    }
 
     const beforeRounding = subtotal.minus(invoiceDiscount);
     const total = roundTo(beforeRounding, business.saleRounding);
@@ -176,14 +179,20 @@ export async function finalizeSale(user: CurrentUser, raw: unknown) {
         priceGroupId: policy.tier?.id ?? null,
         priceGroupName: policy.tier?.name ?? null,
         pricingBasis: basis,
+        soldAt,
       },
     });
+    let taxTotal = ZERO;
 
     for (const l of lines) {
       const p = l.product;
       // Invoice discount is allocated to lines pro rata for commission basis (spec §17.1 net sales).
       const share = subtotal.gt(0) ? l.lineTotal.div(subtotal) : ZERO;
       const basis = l.lineTotal.minus(invoiceDiscount.mul(share)).toDecimalPlaces(2);
+      const taxRate = business.taxEnabled ? (p.taxRate?.active ? p.taxRate : defaultTax) : null;
+      const taxAmount = taxRate ? basis.mul(taxRate.ratePct).div(D(100).plus(taxRate.ratePct)).toDecimalPlaces(2) : ZERO;
+      taxTotal = taxTotal.plus(taxAmount);
+      const warrantyUntil = p.warranty && p.warranty.durationDays > 0 ? new Date(soldAt.getTime() + p.warranty.durationDays * 86_400_000) : null;
 
       const line = await tx.saleLine.create({
         data: {
@@ -203,6 +212,8 @@ export async function finalizeSale(user: CurrentUser, raw: unknown) {
           priceRule: l.price.eq(l.listPrice) ? l.resolved.rule : `Manual price (rule: ${l.resolved.rule} ${l.listPrice.toFixed(2)})`,
           priceGroupId: l.resolved.fallback ? null : l.resolved.tierId,
           priceGroupName: l.resolved.fallback ? null : l.resolved.tierName,
+          warrantyName: p.warranty?.name ?? null, warrantyDays: p.warranty?.durationDays ?? null, warrantyUntil,
+          taxName: taxRate?.name ?? null, taxRatePct: taxRate?.ratePct ?? 0, taxAmount,
         },
       });
 
@@ -217,7 +228,7 @@ export async function finalizeSale(user: CurrentUser, raw: unknown) {
           costTotal = costTotal.plus(pick.qty.mul(pick.unitCost));
           await tx.costAllocation.create({ data: { saleLineId: line.id, costLayerId: pick.layerId, qty: pick.qty, unitCost: pick.unitCost } });
           if (pick.deviceId) {
-            const d = await tx.deviceIdentity.update({ where: { id: pick.deviceId }, data: { state: "SOLD", saleLineId: line.id } });
+            const d = await tx.deviceIdentity.update({ where: { id: pick.deviceId }, data: { state: "SOLD", saleLineId: line.id, soldAt, warrantyUntil } });
             await tx.saleLine.update({ where: { id: line.id }, data: { deviceLabels: { push: d.imei1 ?? d.serial ?? d.id } } });
           }
           await tx.stockMovement.create({
@@ -272,6 +283,18 @@ export async function finalizeSale(user: CurrentUser, raw: unknown) {
       if (p.method === "CHEQUE") await attachCheque(tx, payment.id, "RECEIVED", null, p.reference);
       if (p.method === "STORE_CREDIT")
         await tx.storeCreditEntry.create({ data: { contactId: input.customerId!, amount: amount.neg(), sourceType: "Sale", sourceId: sale.id, reference: number } });
+    }
+
+    if (taxTotal.gt(0)) await tx.sale.update({ where: { id: sale.id }, data: { tax: taxTotal } });
+
+    // Loyalty points for a named customer, on the invoice total.
+    if (input.customerId) {
+      const loyalty = await getLoyalty(tx);
+      const points = pointsFor(total.toString(), loyalty);
+      if (points > 0) {
+        await tx.loyaltyEntry.create({ data: { contactId: input.customerId, points, sourceType: "Sale", sourceId: sale.id, reference: number } });
+        await tx.sale.update({ where: { id: sale.id }, data: { loyaltyEarned: points } });
+      }
     }
 
     await tx.auditEvent.create({

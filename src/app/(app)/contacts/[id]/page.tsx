@@ -4,6 +4,11 @@ import { requirePermission, can } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { D, money, fmtDateTime } from "@/lib/money";
 import { PageHead, DataTable, RowLink, Badge, Stat } from "@/components/ui";
+import { ActionForm } from "@/components/ActionForm";
+import { SubmitButton } from "@/components/SubmitButton";
+import { WhatsAppLink } from "@/components/WhatsAppLink";
+import { getLoyalty, pointsBalance } from "@/lib/loyalty";
+import { redeemPointsForm } from "../../settings/loyalty/actions";
 import { debtOf, openingDue } from "@/lib/debt";
 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) {
@@ -27,19 +32,35 @@ export default async function ContactDetail({ params }: { params: Promise<{ id: 
   const claimCredit = c.isSupplier ? await db.supplierClaim.aggregate({ where: { supplierId: c.id, status: "SETTLED" }, _sum: { creditAmount: true } }) : null;
   const supplierDue = D(c.isSupplier && !c.isCustomer ? c.openingBalance : 0).plus(receipts.reduce((a, r) => a.plus(r.total).minus(r.paid), D(0))).minus(D(claimCredit?._sum.creditAmount));
 
+  const loyalty = c.isCustomer ? await getLoyalty() : null;
+  const [points, storeCredit] = c.isCustomer
+    ? await Promise.all([pointsBalance(db, c.id), db.storeCreditEntry.aggregate({ where: { contactId: c.id }, _sum: { amount: true } }).then((a) => D(a._sum.amount))])
+    : [0, D(0)];
+
   return (
     <div className="stack">
       <PageHead
         eyebrow={`Contacts / ${[c.isCustomer && "Customer", c.isSupplier && "Supplier"].filter(Boolean).join(" & ")}`}
         title={c.name}
-        actions={<>{c.isCustomer && can(user, "debt.receive") && can(user, "sales.create") && <Link className="btn" href={`/pos?customer=${c.id}`}>Receive payment at POS</Link>}{can(user, "contacts.manage") && <Link className="btn" href={`/contacts/${c.id}/edit`}>Edit</Link>}</>}
+        actions={<>{c.isCustomer && can(user, "debt.receive") && can(user, "sales.create") && <Link className="btn" href={`/pos?customer=${c.id}`}>Receive payment at POS</Link>}{c.isCustomer && customerDue.gt(0) && <WhatsAppLink phone={c.phone} label="WhatsApp reminder" text={`Dear ${c.name}, this is a reminder from our shop: your outstanding balance is Rs. ${money(customerDue)}. Please settle it at your earliest convenience. Thank you.`} />}{can(user, "contacts.manage") && <Link className="btn" href={`/contacts/${c.id}/edit`}>Edit</Link>}</>}
       />
       <div className="stats">
         {c.isCustomer && <Stat label="Customer due" value={`Rs. ${money(customerDue)}`} basis={`Opening ${money(openingLeft)} left + invoices − payments`} />}
         {c.isCustomer && <Stat label="Credit limit" value={c.creditLimit ? `Rs. ${money(c.creditLimit)}` : "No limit"} basis={c.payTermDays ? `${c.payTermDays}-day terms` : "No terms set"} />}
         {c.isSupplier && <Stat label="Payable to supplier" value={`Rs. ${money(supplierDue)}`} basis="Posted GRNs − payments − supplier credits" />}
+        {c.isCustomer && (storeCredit.gt(0) || points > 0 || loyalty?.enabled) && <Stat label="Store credit" value={`Rs. ${money(storeCredit)}`} basis={loyalty?.enabled || points > 0 ? `${points.toLocaleString("en-LK")} loyalty points` : "From returns and trade-ins"} />}
         <Stat label="Mobile" value={c.phone ? <a href={`tel:${c.phone}`}>{c.phone}</a> : "—"} basis={c.group?.name} />
       </div>
+
+      {c.isCustomer && loyalty?.enabled && points >= loyalty.minRedeem && can(user, "sales.create") && (
+        <ActionForm action={redeemPointsForm} className="panel row">
+          <input type="hidden" name="contactId" value={c.id} />
+          <label className="field"><span>Convert loyalty points to store credit (1 point = Rs. {loyalty.pointValue})</span>
+            <input name="points" type="number" min={loyalty.minRedeem} max={points} step="1" defaultValue={points} inputMode="numeric" style={{ maxWidth: 160 }} />
+          </label>
+          <SubmitButton>Convert</SubmitButton>
+        </ActionForm>
+      )}
 
       {c.isCustomer && (
         <section>

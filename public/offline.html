@@ -9,26 +9,88 @@
   :root { --bg: #242a26; --card: #fffdf8; --ink: #242a26; --muted: #62695f; --accent: #a83e2b; --accent-ink: #fffdf8; color-scheme: light; }
   @media (prefers-color-scheme: dark) { :root { --bg: #111512; --card: #222622; --ink: #ecede6; --muted: #b5bcae; --accent: #d7755f; --accent-ink: #171a18; color-scheme: dark; } }
   * { box-sizing: border-box; }
-  body { margin: 0; min-height: 100dvh; display: grid; place-items: center; padding: 16px; background: var(--bg); color: var(--ink);
+  body { margin: 0; min-height: 100dvh; display: grid; place-items: start center; padding: 16px; background: var(--bg); color: var(--ink);
     font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Noto Sans Sinhala", "Noto Sans Tamil", sans-serif; }
-  main { width: 100%; max-width: 400px; background: var(--card); border-radius: 6px; padding: 26px 22px; }
+  main { width: 100%; max-width: 460px; background: var(--card); border-radius: 6px; padding: 26px 22px; }
   .brand { font-weight: 700; letter-spacing: 2px; font-size: 16px; }
   h1 { font-size: 21px; margin: 14px 0 6px; }
   p { margin: 0 0 12px; color: var(--muted); }
   button { width: 100%; min-height: 44px; border: 0; border-radius: 5px; background: var(--accent); color: var(--accent-ink); font: inherit; font-weight: 600; cursor: pointer; }
   .small { font-size: 13px; }
+  h2 { font-size: 15px; margin: 20px 0 8px; }
+  ol { margin: 0 0 4px; padding-left: 20px; color: var(--muted); }
+  ol li { margin-bottom: 6px; }
+  input { width: 100%; min-height: 44px; margin-bottom: 8px; padding: 8px 10px; border: 1px solid var(--muted); border-radius: 5px; background: transparent; color: var(--ink); font: inherit; }
+  .two { display: grid; grid-template-columns: 90px 1fr; gap: 8px; }
+  button.ghost { background: transparent; color: var(--ink); border: 1px solid var(--muted); margin-bottom: 8px; }
+  button.sm { width: auto; min-height: 36px; padding: 0 10px; font-size: 13px; margin: 0; flex: none; }
+  ul { list-style: none; margin: 0 0 8px; padding: 0; }
+  ul li { display: flex; gap: 8px; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid color-mix(in srgb, var(--muted) 35%, transparent); }
+  ul li.done { opacity: .5; text-decoration: line-through; }
+  @media print { body { background: #fff; display: block; } form, button, ol, #lead { display: none !important; } main { max-width: none; } }
 </style>
 </head>
 <body>
 <main>
   <div class="brand">FIDO</div>
-  <h1>No connection</h1>
-  <p>This device can't reach the Fido server. Sales, payments, stock and tasks need a live connection, so nothing can be saved right now.</p>
-  <p class="small">Check Wi-Fi or mobile data. This page reloads by itself when the connection comes back.</p>
-  <button type="button" onclick="location.reload()">Try again</button>
+  <h1 id="title">No connection</h1>
+  <p id="lead">This device can't reach the Fido server. Nothing can be saved to the system right now — but the shop can keep selling.</p>
+  <button type="button" id="retry" onclick="location.reload()">Try again</button>
+
+  <h2>Selling while offline</h2>
+  <ol class="small">
+    <li>Sell only what is on the shelf in front of you. For a phone, write down the IMEI from the box.</li>
+    <li>Take <b>cash only</b>. No credit sales, store credit, returns or reloads until the system is back.</li>
+    <li>Write every sale below (or in the paper book) and give the customer a handwritten receipt. Tell them the printed invoice follows.</li>
+    <li>When the connection returns, enter each sale at the POS in the same order, then tick it off here.</li>
+  </ol>
+
+  <h2>Sales written down on this device <span id="count" class="small"></span></h2>
+  <form id="f" autocomplete="off">
+    <input id="item" placeholder="Item (and IMEI for a phone)" required maxlength="120">
+    <div class="two"><input id="qty" inputmode="numeric" placeholder="Qty" value="1" maxlength="5"><input id="amount" inputmode="decimal" placeholder="Cash taken (Rs.)" required maxlength="12"></div>
+    <input id="who" placeholder="Customer name / mobile (optional)" maxlength="80">
+    <button type="submit" class="ghost">Write it down</button>
+  </form>
+  <ul id="list"></ul>
+  <p class="small" id="total"></p>
+  <p class="small">These notes stay on this device only. They are <b>not</b> sales in the system until someone enters them at the POS.</p>
+  <button type="button" class="ghost" id="print" hidden onclick="print()">Print the list</button>
 </main>
 <script>
-  addEventListener("online", function () { location.reload(); });
+  var KEY = "fido-offline-sales", list = document.getElementById("list");
+  function load() { try { return JSON.parse(localStorage.getItem(KEY) || "[]"); } catch (e) { return []; } }
+  function save(v) { try { localStorage.setItem(KEY, JSON.stringify(v)); } catch (e) {} }
+  function esc(t) { var d = document.createElement("div"); d.textContent = t; return d.innerHTML; }
+  function draw() {
+    var v = load(), open = v.filter(function (x) { return !x.done; });
+    list.innerHTML = v.map(function (x, i) {
+      return '<li class="' + (x.done ? "done" : "") + '"><span><b>' + esc(x.item) + '</b> × ' + esc(String(x.qty)) + ' — Rs. ' + esc(String(x.amount)) + (x.who ? ' · ' + esc(x.who) : '') +
+        '<br><span class="small">' + esc(x.at) + '</span></span><button type="button" class="ghost sm" data-i="' + i + '">' + (x.done ? "Remove" : "Entered at POS") + '</button></li>';
+    }).join("");
+    document.getElementById("count").textContent = open.length ? "(" + open.length + " to enter)" : "";
+    document.getElementById("total").textContent = open.length ? "Cash that should be in the drawer from these: Rs. " + open.reduce(function (a, x) { return a + (Number(x.amount) || 0); }, 0).toFixed(2) : "";
+    document.getElementById("print").hidden = !v.length;
+    return open.length;
+  }
+  list.addEventListener("click", function (e) {
+    var i = e.target && e.target.getAttribute("data-i"); if (i == null) return;
+    var v = load(); if (v[i].done) v.splice(i, 1); else v[i].done = true; save(v); draw();
+  });
+  document.getElementById("f").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var v = load();
+    v.push({ item: item.value.trim(), qty: qty.value.trim() || "1", amount: amount.value.trim(), who: who.value.trim(), at: new Date().toLocaleString("en-GB"), done: false });
+    save(v); e.target.reset(); qty.value = "1"; draw(); item.focus();
+  });
+  function online() {
+    document.getElementById("title").textContent = "Back online";
+    document.getElementById("lead").textContent = "Enter the sales below at the POS, in order, and tick each one off. Then this page can be closed.";
+    var b = document.getElementById("retry"); b.textContent = "Open Fido"; b.onclick = function () { location.href = "/pos"; };
+  }
+  // With nothing written down, go straight back to the app when the connection returns.
+  addEventListener("online", function () { if (draw()) online(); else location.reload(); });
+  if (draw() && navigator.onLine) online();
 </script>
 </body>
 </html>

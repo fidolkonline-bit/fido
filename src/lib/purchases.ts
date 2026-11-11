@@ -1,5 +1,7 @@
 import "server-only";
 import { z } from "zod";
+import { imeiProblem } from "./imei";
+import { lockImeis } from "./stock";
 import { posting } from "./db";
 import { D, ZERO } from "./money";
 import { nextNumber } from "./numbering";
@@ -27,8 +29,8 @@ export const receiptInput = z.object({
         devices: z
           .array(
             z.object({
-              imei1: z.string().trim().regex(/^\d{14,17}$/, "IMEI must be 14–17 digits.").nullable().default(null),
-              imei2: z.string().trim().regex(/^\d{14,17}$/, "IMEI 2 must be 14–17 digits.").nullable().default(null),
+              imei1: z.string().trim().nullable().default(null).superRefine((v, c) => { const m = imeiProblem(v); if (m) c.addIssue({ code: "custom", message: m }); }),
+              imei2: z.string().trim().nullable().default(null).superRefine((v, c) => { const m = imeiProblem(v, "IMEI 2"); if (m) c.addIssue({ code: "custom", message: m }); }),
               serial: z.string().trim().max(60).nullable().default(null),
             }),
           )
@@ -106,11 +108,13 @@ export async function postReceipt(user: CurrentUser, raw: unknown) {
     if (payAmount.gt(total)) throw new ReceiptError("Payment is more than the receipt total.");
 
     // The same physical device cannot be in stock twice.
-    const imeis = lines.flatMap((l) => l.devices.map((d) => d.imei1).filter((x): x is string => !!x));
+    // Both SIM slots count: an IMEI may appear once, as IMEI 1 or IMEI 2, on this receipt and in live stock.
+    const imeis = lines.flatMap((l) => l.devices.flatMap((d) => [d.imei1, d.imei2]).filter((x): x is string => !!x));
     if (new Set(imeis).size !== imeis.length) throw new ReceiptError("The same IMEI is entered twice on this receipt.");
     if (imeis.length) {
-      const clash = await tx.deviceIdentity.findFirst({ where: { imei1: { in: imeis }, state: { notIn: ["SOLD", "WRITTEN_OFF"] } } });
-      if (clash) throw new ReceiptError(`IMEI ${clash.imei1} is already in stock.`);
+      await lockImeis(tx, imeis);
+      const clash = await tx.deviceIdentity.findFirst({ where: { OR: [{ imei1: { in: imeis } }, { imei2: { in: imeis } }], state: { notIn: ["SOLD", "WRITTEN_OFF"] } } });
+      if (clash) throw new ReceiptError(`IMEI ${imeis.find((i) => i === clash.imei1 || i === clash.imei2)} is already in stock.`);
     }
 
     const number = await nextNumber(tx, "GRN");

@@ -69,6 +69,7 @@ export function Shell({ nav, user, locations, locationId, registerOpen, theme, v
         <Link className="btn hide-sm" href="/repairs/new">Repair</Link>
         <Link href="/settings" className="meta hide-sm" style={{ textDecoration: "none" }}><span>{user.name} · {user.role}</span></Link>
         <ThemeSwitch initial={theme} />
+        <Link className="btn" href="/switch">Switch cashier</Link>
         <form action={logout}><button className="btn" type="submit">Log out</button></form>
       </header>
 

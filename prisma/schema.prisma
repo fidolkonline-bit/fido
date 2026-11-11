@@ -23,6 +23,9 @@ model Business {
   saleRounding    Decimal    @default(0.5) @db.Decimal(6, 2)
   allowOversell   Boolean    @default(false)
   commissionBasis String     @default("INVOICE_VALUE")
+  // Tax: off until the shop is registered. Selling prices include tax; the receipt shows the tax inside the total.
+  taxEnabled      Boolean    @default(false)
+  taxNumber       String?
   createdAt       DateTime   @default(now())
   locations       Location[]
 }
@@ -62,6 +65,8 @@ model Location {
   holidays        Holiday[]
   employees       EmployeeProfile[]
   clockEvents     ClockEvent[]
+  tradeIns        TradeIn[]
+  stockCounts     StockCount[]
 }
 
 model NumberScheme {
@@ -130,6 +135,10 @@ model Person {
   messagesSent          StaffMessage[]
   threadMembers         ThreadMember[]
   targets               SalesTarget[]
+  tradeIns              TradeIn[]
+  stockCounts           StockCount[]
+  repairPhotos          RepairPhoto[]
+  instalmentPlans       InstalmentPlan[]
 }
 
 model LoginAccount {
@@ -142,6 +151,8 @@ model LoginAccount {
   roleId         String
   role           Role           @relation(fields: [roleId], references: [id])
   maxDiscountPct Decimal        @default(0) @db.Decimal(5, 2)
+  // Short PIN for switching cashier on a device that is already signed in. Never accepted on the public login page.
+  pinHash        String?
   lastLoginAt    DateTime?
   createdAt      DateTime       @default(now())
   sessions       Session[]
@@ -161,6 +172,19 @@ model Session {
   pushSubscriptions PushSubscription[]
 
   @@index([accountId])
+}
+
+// Every sign-in try (password or PIN). Used to lock a username / address after repeated failures and as the login log.
+model LoginAttempt {
+  id        String   @id @default(cuid())
+  username  String
+  ip        String?
+  kind      String   @default("PASSWORD") // PASSWORD, PIN
+  ok        Boolean
+  createdAt DateTime @default(now())
+
+  @@index([username, createdAt])
+  @@index([ip, createdAt])
 }
 
 // Web Push endpoint of one installed app / browser (PWA). Tied to the login session that turned it on, so
@@ -303,6 +327,10 @@ model Contact {
   drafts        SaleDraft[]
   subscriptions Subscription[]
 
+  tradeIns        TradeIn[]
+  loyaltyEntries  LoyaltyEntry[]
+  instalmentPlans InstalmentPlan[]
+
   @@index([name])
   @@index([phone])
 }
@@ -388,6 +416,11 @@ model Product {
 
   repairParts RepairPart[]
   prices      ProductPrice[]
+
+  taxRateId  String?
+  taxRate    TaxRate?         @relation(fields: [taxRateId], references: [id])
+  tradeIns   TradeIn[]
+  countLines StockCountLine[]
 
   @@index([name])
   @@index([barcode])
@@ -609,6 +642,10 @@ model DeviceIdentity {
   costLayer     CostLayer?   @relation(fields: [costLayerId], references: [id])
   saleLineId    String?
   saleLine      SaleLine?    @relation(fields: [saleLineId], references: [id])
+  // Set when sold: the warranty runs from the sale date for the product's warranty period.
+  soldAt        DateTime?
+  warrantyUntil DateTime?
+  tradeIn       TradeIn?
   createdAt     DateTime     @default(now())
 
   @@index([imei1])
@@ -661,6 +698,10 @@ model Sale {
 
   debtAllocations DebtAllocation[]
 
+  // Prices include tax: `tax` is the part of `total` that is tax, per the rates on the lines.
+  instalmentPlan InstalmentPlan?
+  loyaltyEarned  Int             @default(0)
+
   @@index([soldAt])
   @@index([customerId])
 }
@@ -696,6 +737,15 @@ model SaleLine {
   priceGroupId   String?
   priceGroup     PriceGroup?         @relation(fields: [priceGroupId], references: [id], onDelete: Restrict)
   priceGroupName String?
+  // Warranty as sold (kept even if the product's warranty changes later).
+  warrantyName   String?
+  warrantyDays   Int?
+  warrantyUntil  DateTime?
+  // Tax as sold: rate in percent and the tax inside lineTotal after the invoice discount share.
+  taxName        String?
+  taxRatePct     Decimal             @default(0) @db.Decimal(6, 3)
+  taxAmount      Decimal             @default(0) @db.Decimal(14, 2)
+  repairClaims   RepairJob[]
 }
 
 model CostAllocation {
@@ -710,18 +760,21 @@ model CostAllocation {
 }
 
 model CommissionAccrual {
-  id           String   @id @default(cuid())
-  saleLineId   String
-  saleLine     SaleLine @relation(fields: [saleLineId], references: [id])
+  id           String     @id @default(cuid())
+  // A sale line (USER / AGENT), or a repair job for the technician's share of labour (TECHNICIAN).
+  saleLineId   String?
+  saleLine     SaleLine?  @relation(fields: [saleLineId], references: [id])
+  repairJobId  String?
+  repairJob    RepairJob? @relation(fields: [repairJobId], references: [id])
   recipientId  String
-  recipient    Person   @relation(fields: [recipientId], references: [id])
-  role         String // USER, AGENT
-  basis        Decimal  @db.Decimal(14, 2)
-  amount       Decimal  @db.Decimal(14, 4)
-  state        String   @default("ACCRUED") // ACCRUED, REVERSAL, APPROVED, SETTLED
+  recipient    Person     @relation(fields: [recipientId], references: [id])
+  role         String // USER, AGENT, TECHNICIAN
+  basis        Decimal    @db.Decimal(14, 2)
+  amount       Decimal    @db.Decimal(14, 4)
+  state        String     @default("ACCRUED") // ACCRUED, REVERSAL, APPROVED, SETTLED
   // Set on negative rows that reverse entitlement for returned quantity (§9.2).
   returnLineId String?
-  createdAt    DateTime @default(now())
+  createdAt    DateTime   @default(now())
 
   // Approval and settlement (§9.2): a row is paid at most once, directly or through payroll.
   approvedAt   DateTime?
@@ -931,6 +984,20 @@ model RepairJob {
   events             RepairEvent[]
   parts              RepairPart[]
   payments           Payment[]
+
+  // Warranty claim on something this shop sold: linked to the original sale line / device.
+  warrantyClaim    Boolean             @default(false)
+  originSaleLineId String?
+  originSaleLine   SaleLine?           @relation(fields: [originSaleLineId], references: [id])
+  originDeviceId   String?
+  // Customer agreed to the repair terms at intake; signature is a small PNG data URL drawn on the screen.
+  termsText        String?
+  termsAcceptedAt  DateTime?
+  signature        String?
+  // Random token for the public "track my repair" page (no login, no personal details shown).
+  trackToken       String?             @unique
+  photos           RepairPhoto[]
+  commissions      CommissionAccrual[]
 
   @@index([status])
   @@index([customerId])
@@ -1548,7 +1615,9 @@ model DocumentFile {
   description String?
   mimeType    String
   size        Int
-  data        Bytes
+  // Older files are kept in the database; new ones go to file storage (storagePath) when it is set up.
+  data        Bytes?
+  storagePath String?
   audience    String[] @default([])
   createdById String
   createdBy   Person   @relation(fields: [createdById], references: [id])
@@ -1628,6 +1697,9 @@ model Payment {
 
   claimId String?
   claim   SupplierClaim? @relation(fields: [claimId], references: [id])
+
+  tradeInId String?
+  tradeIn   TradeIn? @relation(fields: [tradeInId], references: [id])
 
   repairJobId     String?
   repairJob       RepairJob?     @relation(fields: [repairJobId], references: [id])
@@ -1746,4 +1818,189 @@ model AuditEvent {
 
   @@index([subjectType, subjectId])
   @@index([createdAt])
+}
+
+// Server errors recorded by src/instrumentation.ts (Settings › Error log). Kept 90 days by the daily job.
+model ErrorLog {
+  id        String   @id @default(cuid())
+  message   String
+  stack     String?
+  digest    String?
+  path      String?
+  method    String?
+  route     String?
+  kind      String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+// ───────────── Trade-in / used phones bought from customers ─────────────
+
+// One used device bought from a person. The device enters stock at the agreed value (its own lot), and the seller is
+// paid in cash from the register, by bank, or as store credit to spend on a sale. The seller's ID is recorded.
+model TradeIn {
+  id                String          @id @default(cuid())
+  number            String          @unique
+  locationId        String
+  location          Location        @relation(fields: [locationId], references: [id])
+  customerId        String
+  customer          Contact         @relation(fields: [customerId], references: [id])
+  sellerIdType      String          @default("NIC") // NIC, PASSPORT, DRIVING_LICENCE
+  sellerIdNumber    String
+  sellerAddress     String?
+  productId         String
+  product           Product         @relation(fields: [productId], references: [id])
+  imei1             String?
+  imei2             String?
+  serial            String?
+  grade             String          @default("B") // A, B, C, D
+  batteryHealth     Int?
+  conditionNotes    String?
+  accessories       String?
+  // Seller confirmed: it is theirs to sell, not stolen or under finance, accounts (iCloud / Google) signed out.
+  ownershipDeclared Boolean         @default(false)
+  accountsRemoved   Boolean         @default(false)
+  value             Decimal         @db.Decimal(14, 2)
+  settlement        String // CASH, BANK_TRANSFER, STORE_CREDIT
+  readyToSell       Boolean         @default(false)
+  deviceId          String?         @unique
+  device            DeviceIdentity? @relation(fields: [deviceId], references: [id])
+  costLayerId       String?
+  idempotencyKey    String?         @unique
+  createdById       String
+  createdBy         Person          @relation(fields: [createdById], references: [id])
+  createdAt         DateTime        @default(now())
+  payments          Payment[]
+
+  @@index([customerId])
+  @@index([imei1])
+}
+
+// ───────────── Repair photos ─────────────
+
+model RepairPhoto {
+  id          String    @id @default(cuid())
+  jobId       String
+  job         RepairJob @relation(fields: [jobId], references: [id])
+  kind        String    @default("INTAKE") // INTAKE, WORK, DONE
+  storagePath String
+  mimeType    String
+  size        Int
+  createdById String
+  createdBy   Person    @relation(fields: [createdById], references: [id])
+  createdAt   DateTime  @default(now())
+
+  @@index([jobId])
+}
+
+// ───────────── Stock take ─────────────
+
+// A count sheet for one location. Expected quantities are frozen when the sheet is opened; posting turns the
+// differences into one stock adjustment (shortage written off at lot cost, surplus added as found stock).
+model StockCount {
+  id           String           @id @default(cuid())
+  number       String           @unique
+  locationId   String
+  location     Location         @relation(fields: [locationId], references: [id])
+  status       String           @default("OPEN") // OPEN, POSTED, CANCELLED
+  scope        String? // category name, or null for everything
+  categoryId   String?
+  notes        String?
+  createdById  String
+  createdBy    Person           @relation(fields: [createdById], references: [id])
+  createdAt    DateTime         @default(now())
+  postedAt     DateTime?
+  adjustmentId String?
+  lines        StockCountLine[]
+
+  @@index([locationId, status])
+}
+
+model StockCountLine {
+  id                String     @id @default(cuid())
+  countId           String
+  count             StockCount @relation(fields: [countId], references: [id], onDelete: Cascade)
+  productId         String
+  product           Product    @relation(fields: [productId], references: [id])
+  expectedQty       Decimal    @db.Decimal(14, 4)
+  countedQty        Decimal?   @db.Decimal(14, 4)
+  // IMEI-tracked products are counted by scanning each device.
+  expectedDeviceIds String[]   @default([])
+  countedDeviceIds  String[]   @default([])
+  unknownCodes      String[]   @default([])
+  note              String?
+  updatedAt         DateTime   @updatedAt
+
+  @@unique([countId, productId])
+}
+
+// ───────────── Tax ─────────────
+
+model TaxRate {
+  id        String    @id @default(cuid())
+  name      String    @unique
+  ratePct   Decimal   @db.Decimal(6, 3)
+  isDefault Boolean   @default(false)
+  active    Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  products  Product[]
+}
+
+// ───────────── Loyalty points ─────────────
+
+model LoyaltyEntry {
+  id         String   @id @default(cuid())
+  contactId  String
+  contact    Contact  @relation(fields: [contactId], references: [id])
+  points     Int // + earned, − redeemed or reversed
+  sourceType String // Sale, SaleReturn, Redeem, Adjust
+  sourceId   String
+  reference  String?
+  createdAt  DateTime @default(now())
+
+  @@index([contactId])
+  @@index([sourceType, sourceId])
+}
+
+// ───────────── Instalment plans ─────────────
+
+// A payment schedule over the unpaid balance of ONE credit sale. Money still arrives as ordinary debt payments on
+// that sale; an instalment counts as paid when the sale's payments cover it, in order.
+model InstalmentPlan {
+  id             String          @id @default(cuid())
+  number         String          @unique
+  saleId         String          @unique
+  sale           Sale            @relation(fields: [saleId], references: [id])
+  customerId     String
+  customer       Contact         @relation(fields: [customerId], references: [id])
+  financed       Decimal         @db.Decimal(14, 2) // balance due when the plan was made
+  paidBefore     Decimal         @db.Decimal(14, 2) // already paid on the sale then (the down payment)
+  count          Int
+  frequency      String // WEEKLY, FORTNIGHTLY, MONTHLY
+  firstDueAt     DateTime
+  guarantorName  String?
+  guarantorPhone String?
+  guarantorId    String?
+  notes          String?
+  status         String          @default("ACTIVE") // ACTIVE, CANCELLED
+  createdById    String
+  createdBy      Person          @relation(fields: [createdById], references: [id])
+  createdAt      DateTime        @default(now())
+  dues           InstalmentDue[]
+
+  @@index([customerId])
+}
+
+model InstalmentDue {
+  id         String         @id @default(cuid())
+  planId     String
+  plan       InstalmentPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  seq        Int
+  dueAt      DateTime
+  amount     Decimal        @db.Decimal(14, 2)
+  remindedAt DateTime?
+
+  @@unique([planId, seq])
+  @@index([dueAt])
 }

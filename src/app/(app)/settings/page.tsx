@@ -1,7 +1,7 @@
 import { requireUser, can } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { PageHead, DataTable, Badge } from "@/components/ui";
-import { BusinessForm, LocationForm, PasswordForm } from "./SettingsForms";
+import { BusinessForm, LocationForm, PasswordForm, PinForm } from "./SettingsForms";
 import { DeviceSettings } from "@/components/pwa/DeviceSettings";
 import { pushPublicKey } from "@/lib/push";
 
@@ -13,6 +13,7 @@ export default async function Settings() {
   const [business, locations] = admin
     ? await Promise.all([db.business.findFirstOrThrow(), db.location.findMany({ orderBy: { name: "asc" } })])
     : [null, []];
+  const hasPin = !!(await db.loginAccount.findUnique({ where: { id: user.accountId }, select: { pinHash: true } }))?.pinHash;
   return (
     <div className="stack">
       <PageHead eyebrow="Settings" title={admin ? "Business & locations" : "My account"} />
@@ -32,6 +33,7 @@ export default async function Settings() {
       )}
       <DeviceSettings vapidKey={pushPublicKey()} admin={admin} />
       <PasswordForm />
+      <PinForm hasPin={hasPin} />
     </div>
   );
 }

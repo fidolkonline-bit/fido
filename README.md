@@ -87,6 +87,54 @@ notifications on again. iPhones only get notifications from the Home Screen app.
 needs Fido open (browsers don't allow custom alarm sounds from a push); a closed app gets the phone's normal
 notification sound.
 
+## Backups and file storage (free services)
+
+**File storage** is Supabase Storage (free plan: 1 GB), in two private buckets created on first use: `fido-files`
+(documents, repair photos) and `fido-backups`. Set `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`
+(Supabase › Project settings › API) in Vercel and `.env.local`. Without them the app still works: documents stay in the
+database, photos are not offered, and Settings › Backups says storage is not connected. The browser only ever gets
+links that expire in minutes. Settings › Backups & file storage has a button to move older documents out of the database.
+
+**Nightly backup** runs in GitHub Actions (`.github/workflows/backup.yml`, 01:30 Sri Lanka time): `pg_dump` of the
+`public` schema → checked that it can be read back → encrypted (AES-256, `openssl`) → uploaded to `fido-backups` → old
+copies pruned (30 nightly + the 1st of each month for a year). The repository is public, so the script prints nothing
+secret and the dump never touches GitHub storage. Add these repository secrets (GitHub › Settings › Secrets › Actions):
+
+| Secret | Value |
+| --- | --- |
+| `BACKUP_DATABASE_URL` | the `DIRECT_URL` (session pooler, port 5432) |
+| `BACKUP_PASSPHRASE` | a long random phrase — `openssl rand -base64 32`. **Keep a copy outside this system.** Without it no backup can be opened |
+| `SUPABASE_URL` | `https://<ref>.supabase.co` |
+| `SUPABASE_SERVICE_ROLE_KEY` | the service-role key |
+
+Then run it once by hand: GitHub › Actions › *Nightly database backup* › *Run workflow*, and check Settings › Backups in
+the app. GitHub pauses scheduled workflows after 60 days without a commit; the app's home screen warns the owner when
+the newest backup is older than 36 hours.
+
+**Restore** (to a new, empty database — never over the live one without a fresh backup of it):
+
+```bash
+openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass pass:"$BACKUP_PASSPHRASE" -in fido-<date>.dump.enc -out fido.dump
+pg_restore --no-owner --no-privileges --dbname "$NEW_DATABASE_URL" fido.dump
+```
+
+Practise a restore once before relying on the backups.
+
+## Checks
+
+```bash
+npm run typecheck && npm run lint && npm test     # also run by GitHub Actions on every push (.github/workflows/ci.yml)
+```
+
+`tests/integration/flows.ts` runs the posting logic end to end (sale limits, tax, warranty, loyalty, trade-in, instalments,
+stock take, repair commission, login lock). It refuses to run unless `DATABASE_URL` points at localhost:
+
+```bash
+DATABASE_URL=postgresql://postgres@127.0.0.1:5432/fido_test DIRECT_URL=$DATABASE_URL npx prisma migrate deploy
+DATABASE_URL=postgresql://postgres@127.0.0.1:5432/fido_test ADMIN_PASSWORD=local-only SEED_DEMO=1 npx tsx prisma/seed.ts
+DATABASE_URL=postgresql://postgres@127.0.0.1:5432/fido_test npx tsx --conditions=react-server tests/integration/flows.ts
+```
+
 ## Code map
 
 | Path | What |
@@ -215,6 +263,32 @@ payment accounts, first reports, settings.
   (`Contact.openingPaid`), so every debt figure (lists, RP-17, RP-24, credit limit) nets them off.
 - Permissions: `debt.view`, `debt.receive` (Cashier has both), `debt.allocate`, `debt.account`, `debt.backdate`,
   `debt.reverse` (Manager, Owner). Corrections are linked reversals; the receipt stays, marked reversed.
+
+**Safety and shop features (11 Nov 2026):**
+- Sign-in: 5 wrong tries lock a username for 15 minutes (20 per address); every try is logged on the user's edit page.
+  Cashier PIN switch (`/switch`) works only on a device that is already signed in; a switched session lasts 16 hours.
+- Users can be edited after creation (role, discount limit, locations, commission, password reset, clear PIN).
+- Discounts: one allowance per sale — line cuts and the invoice discount cannot be stacked; the minimum price is tested
+  after every discount (`src/lib/discount-limits.ts`).
+- IMEI: 15-digit check digit validated on receiving, imports, trade-ins and repair intake; duplicate entry locked.
+- Trade-ins (`/trade-ins`): used phone bought from a customer with seller ID and declaration; stock in at the agreed
+  value in its own lot (held for checking by default); paid by cash, bank or store credit towards a sale.
+- Warranty: expiry stored per sale line and per IMEI; Warranty lookup by IMEI / serial / invoice / mobile opens a
+  repair job linked to the original sale.
+- Repairs: photos (file storage), terms and on-screen signature, public tracking link (`/track/<token>`, no personal
+  details), technician commission on labour at handover (Settings › Repair terms & commission), paid with sales commission.
+- Stock take (`/stock-counts`): frozen expected quantities, count by typing or scanning (phones by IMEI), one stock
+  adjustment for the differences. Reorder suggestions create a purchase order per supplier.
+- Camera scanning (POS, product search, stock take, IMEI fields): browser detector on Android, bundled reader on iPhone.
+- Tax (Settings › Tax): off by default; prices include tax, each invoice shows the tax inside the total, RP-20 by rate.
+- Loyalty points: earned on sales to named customers, converted to store credit on the customer page, reversed on returns.
+- Instalment plans: a schedule over one credit sale's balance (no interest); paid through ordinary debt payments,
+  oldest instalment first; SMS reminder before each due date; printable agreement.
+- WhatsApp buttons (invoice, repair update, debt and instalment reminders) open WhatsApp with the message filled in;
+  staff press Send. Nothing is sent by the server.
+- Offline: the offline screen carries the cash-only selling procedure and a list of sales written down on the device,
+  to be entered at the POS when the connection returns. Sales are never posted automatically from offline notes.
+- Audit log and error log viewers under Settings; security headers (CSP, frame, HSTS) in `next.config.ts`.
 
 Before the first live payroll: set up EPF/ETF, tax and any overtime / holiday-pay rules as pay components and
 check them against approved sample payslips (spec §26).

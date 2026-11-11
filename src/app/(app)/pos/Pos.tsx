@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
+import { ScanButton } from "@/components/CameraScan";
 import { searchProducts, listLayers, type ProductHit, type DeviceHit, type LayerHit } from "../search";
 import { resolvePrice, type Policy } from "@/lib/price-rules";
 import { DevicePicker, deviceLabel } from "@/components/DevicePicker";
@@ -207,7 +208,11 @@ export function Pos(props: Props) {
   const onSearchKey = async (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key !== "Enter") return;
     e.preventDefault();
-    const term = q.trim();
+    await resolveCode(q);
+  };
+  // Shared by the Enter key (hardware scanner) and the phone camera scanner.
+  const resolveCode = async (raw: string) => {
+    const term = raw.trim();
     if (!term) return;
     clearTimeout(timer.current);
     setQ(""); setHits([]);
@@ -293,9 +298,10 @@ export function Pos(props: Props) {
     <div className="pos">
       <section className="stack" style={{ gap: 12 }}>
         <div className="row"><h1 style={{ fontSize: 20 }}>POS</h1><span className="muted small">{props.locationName}</span></div>
-        <div style={{ position: "relative" }}>
-          <input ref={searchRef} value={q} onChange={(e) => runSearch(e.target.value)} onKeyDown={onSearchKey}
+        <div style={{ position: "relative", display: "flex", gap: 6 }}>
+          <input style={{ flex: 1 }} ref={searchRef} value={q} onChange={(e) => runSearch(e.target.value)} onKeyDown={onSearchKey}
             placeholder="Scan barcode / search product, SKU or lot" aria-label="Scan or search product" autoComplete="off" enterKeyHint="search" />
+          <ScanButton onCode={resolveCode} label="Scan with camera" />
         </div>
         {hits.length > 0 && (
           <div className="pos-results">

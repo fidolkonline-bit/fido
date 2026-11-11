@@ -3,13 +3,14 @@ import type { Prisma } from "@prisma/client";
 import { requirePermission, can } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { D, money, fmtDateTime, colomboDayStart } from "@/lib/money";
-import { PageHead, DataTable, RowLink, Badge } from "@/components/ui";
+import { PageHead, DataTable, RowLink, Badge, Pager, PAGE_SIZE, pageOf } from "@/components/ui";
 
 export const metadata = { title: "All sales" };
 
-export default async function Sales({ searchParams }: { searchParams: Promise<{ q?: string; pay?: string; range?: string }> }) {
+export default async function Sales({ searchParams }: { searchParams: Promise<{ q?: string; pay?: string; range?: string; page?: string }> }) {
   const user = await requirePermission("sales.view");
-  const { q, pay, range = "30" } = await searchParams;
+  const { q, pay, range = "30", page: pageParam } = await searchParams;
+  const page = pageOf(pageParam);
   const since = range === "today" ? colomboDayStart() : range === "all" ? undefined : new Date(Date.now() - Number(range) * 86_400_000);
   const where: Prisma.SaleWhereInput = {
     stage: "FINAL",
@@ -18,10 +19,12 @@ export default async function Sales({ searchParams }: { searchParams: Promise<{ 
     ...(pay === "due" ? { paymentState: { not: "PAID" } } : pay === "paid" ? { paymentState: "PAID" } : {}),
     ...(q ? { OR: [{ number: { contains: q, mode: "insensitive" } }, { customer: { name: { contains: q, mode: "insensitive" } } }, { customer: { phone: { contains: q } } }] } : {}),
   };
-  const [sales, agg] = await Promise.all([
-    db.sale.findMany({ where, orderBy: { soldAt: "desc" }, take: 100, include: { customer: true, createdBy: true } }),
+  const [found, agg] = await Promise.all([
+    db.sale.findMany({ where, orderBy: [{ soldAt: "desc" }, { id: "desc" }], skip: (page - 1) * PAGE_SIZE, take: PAGE_SIZE + 1, include: { customer: true, createdBy: true } }),
     db.sale.aggregate({ where, _sum: { total: true, paid: true, credited: true }, _count: true }),
   ]);
+
+  const sales = found.slice(0, PAGE_SIZE);
 
   return (
     <div>
@@ -59,7 +62,7 @@ export default async function Sales({ searchParams }: { searchParams: Promise<{ 
           </tr>
         }
       />
-      {sales.length === 100 && <p className="small muted">Showing the latest 100 rows; totals cover all {agg._count} filtered sales.</p>}
+      <Pager page={page} hasNext={found.length > PAGE_SIZE} query={{ q, pay, range }} shown={sales.length} noun="sales" />
     </div>
   );
 }

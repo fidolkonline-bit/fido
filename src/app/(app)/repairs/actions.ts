@@ -5,6 +5,10 @@ import { revalidatePath } from "next/cache";
 import { requirePermission } from "@/lib/auth";
 import * as R from "@/lib/repairs";
 import { formError, num, str } from "@/lib/forms";
+import { randomUUID } from "crypto";
+import { db } from "@/lib/db";
+import { FILES_BUCKET, putFile, removeFiles, storageConfigured } from "@/lib/storage";
+import { saveSetting } from "@/lib/settings";
 
 type Res = { error?: string; ok?: string };
 const done = (id: string) => revalidatePath(`/repairs/${id}`);
@@ -75,4 +79,52 @@ export async function doPurge(f: FormData) {
   const id = String(f.get("jobId"));
   await R.purgeCredential(user, id);
   done(id);
+}
+
+// ───────────── Photos (private file storage, opened through short-lived links) ─────────────
+
+const MAX_PHOTO = 3 * 1024 * 1024;
+const MAX_PHOTOS_PER_JOB = 12;
+
+export async function addRepairPhoto(_: Res | undefined, f: FormData): Promise<Res> {
+  const user = await requirePermission("repairs.manage");
+  const jobId = String(f.get("jobId") ?? "");
+  const kind = ["INTAKE", "WORK", "DONE"].includes(String(f.get("kind"))) ? String(f.get("kind")) : "INTAKE";
+  const file = f.get("photo");
+  if (!storageConfigured()) return { error: "File storage is not set up yet (Settings › Backups & file storage)." };
+  if (!(file instanceof File) || file.size === 0) return { error: "Take or choose a photo." };
+  if (!/^image\/(jpeg|png|webp)$/.test(file.type)) return { error: "Photos must be JPEG, PNG or WebP." };
+  if (file.size > MAX_PHOTO) return { error: "The photo is too large (3 MB at most)." };
+  const job = await db.repairJob.findUnique({ where: { id: jobId }, select: { id: true, _count: { select: { photos: true } } } });
+  if (!job) return { error: "Job not found." };
+  if (job._count.photos >= MAX_PHOTOS_PER_JOB) return { error: `A job can hold ${MAX_PHOTOS_PER_JOB} photos. Remove one first.` };
+  const ext = file.type === "image/png" ? "png" : file.type === "image/webp" ? "webp" : "jpg";
+  const path = `repairs/${jobId}/${randomUUID()}.${ext}`;
+  try {
+    await putFile(FILES_BUCKET, path, Buffer.from(await file.arrayBuffer()), file.type);
+    await db.repairPhoto.create({ data: { jobId, kind, storagePath: path, mimeType: file.type, size: file.size, createdById: user.personId } });
+  } catch (e) {
+    return formError(e) ?? {};
+  }
+  done(jobId);
+  return { ok: "Photo saved." };
+}
+
+export async function removeRepairPhoto(f: FormData) {
+  await requirePermission("repairs.manage");
+  const photo = await db.repairPhoto.delete({ where: { id: String(f.get("id")) } });
+  await removeFiles(FILES_BUCKET, [photo.storagePath]).catch(() => {});
+  done(photo.jobId);
+}
+
+export async function saveRepairSettings(_: Res | undefined, f: FormData): Promise<Res> {
+  const user = await requirePermission("settings.manage");
+  try {
+    const v = R.repairSettingsSchema.parse({ terms: String(f.get("terms") ?? ""), commissionPct: num(f, "commissionPct") ?? 0 });
+    await saveSetting("repairs", v, user.personId);
+  } catch (e) {
+    return formError(e) ?? {};
+  }
+  revalidatePath("/settings/repairs");
+  return { ok: "Saved. New jobs use these terms; the commission applies to jobs collected from now on." };
 }

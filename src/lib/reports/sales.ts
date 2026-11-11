@@ -21,7 +21,7 @@ export const salesReports: ReportDef[] = [
         db.stockAdjustmentLine.findMany({ where: { qty: { lt: 0 }, adjustment: { createdAt: inPeriod(ctx), locationId: locIn(ctx) } }, select: { qty: true, unitCost: true } }),
         db.supplierClaim.aggregate({ where: { status: "SETTLED", settledAt: inPeriod(ctx), locationId: locIn(ctx) }, _sum: { lossValue: true } }),
         db.repairJob.findMany({ where: { status: "COLLECTED", collectedAt: inPeriod(ctx), locationId: locIn(ctx) }, include: { parts: true } }),
-        db.commissionAccrual.aggregate({ where: { createdAt: inPeriod(ctx), saleLine: { sale: { locationId: locIn(ctx) } } }, _sum: { amount: true } }),
+        db.commissionAccrual.aggregate({ where: { createdAt: inPeriod(ctx), OR: [{ saleLine: { sale: { locationId: locIn(ctx) } } }, { repairJob: { locationId: locIn(ctx) } }] }, _sum: { amount: true } }),
         db.salesTarget.findMany({ where: { approvedAt: inPeriod(ctx) } }),
         db.payslip.findMany({ where: { run: { status: { in: ["APPROVED", "PART_PAID", "PAID"] }, periodEnd: { gte: new Date(`${ctx.fromYmd}T00:00:00Z`), lte: new Date(`${ctx.toYmd}T00:00:00Z`) } } } }),
       ]);
@@ -129,14 +129,14 @@ export const salesReports: ReportDef[] = [
   },
   {
     id: "RP-12", slug: "commissions", title: "Sales representative / commissions", group: "Profit & sales",
-    basis: "Commission accrued on sales in the period (category pool × share), reversals from returns, and payout state. Target bonuses are in RP-35.",
+    basis: "Commission accrued on sales in the period (category pool × share), technician commission on collected repairs (share of labour), reversals from returns, and payout state. Target bonuses are in RP-35.",
     async run(ctx) {
-      const acc = await db.commissionAccrual.findMany({ where: { createdAt: inPeriod(ctx), saleLine: { sale: { locationId: locIn(ctx) } } }, include: { recipient: true, settlement: true } });
+      const acc = await db.commissionAccrual.findMany({ where: { createdAt: inPeriod(ctx), OR: [{ saleLine: { sale: { locationId: locIn(ctx) } } }, { repairJob: { locationId: locIn(ctx) } }] }, include: { recipient: true, settlement: true } });
       const g = groupSum(acc, (a) => `${a.recipient.fullName}|${a.role}`, {
         basis: (a) => (D(a.amount).gt(0) ? a.basis : 0), accrued: (a) => (D(a.amount).gt(0) ? a.amount : 0), reversed: (a) => (D(a.amount).lt(0) ? a.amount : 0),
         settled: (a) => (a.settlementId ? a.amount : 0), approved: (a) => (a.approvedAt && !a.settlementId ? a.amount : 0), pending: (a) => (!a.approvedAt && !a.settlementId ? a.amount : 0),
       });
-      const rows: Row[] = [...g.entries()].map(([k, v]) => { const [name, role] = k.split("|"); return { name, role: role === "USER" ? "Salesperson" : "Agent", basis: v.basis, accrued: v.accrued, reversed: v.reversed, net: v.accrued.plus(v.reversed), paid: v.settled, approved: v.approved, pending: v.pending }; });
+      const rows: Row[] = [...g.entries()].map(([k, v]) => { const [name, role] = k.split("|"); return { name, role: role === "USER" ? "Salesperson" : role === "TECHNICIAN" ? "Technician (repairs)" : "Agent", basis: v.basis, accrued: v.accrued, reversed: v.reversed, net: v.accrued.plus(v.reversed), paid: v.settled, approved: v.approved, pending: v.pending }; });
       return {
         columns: [{ key: "name", label: "Recipient" }, { key: "role", label: "Type" }, { key: "basis", label: "Eligible sales", kind: "money" }, { key: "accrued", label: "Accrued", kind: "money" }, { key: "reversed", label: "Return reversals", kind: "money" }, { key: "net", label: "Net", kind: "money" }, { key: "paid", label: "Paid", kind: "money" }, { key: "approved", label: "Approved, unpaid", kind: "money" }, { key: "pending", label: "Not approved", kind: "money" }],
         rows, totals: totalsOf(rows, ["basis", "accrued", "reversed", "net", "paid", "approved", "pending"]),
@@ -222,17 +222,33 @@ export const salesReports: ReportDef[] = [
   },
   {
     id: "RP-20", slug: "tax", title: "Tax", group: "Profit & sales",
-    basis: "Output tax on sales and input tax on expenses as recorded. No tax rates are configured yet.",
+    basis: "Output tax inside sales (prices include tax), by tax rate, less the tax on returns made in the period; input tax on expenses as recorded. Sales made while tax was switched off carry no tax.",
     async run(ctx) {
-      const [s, e] = await Promise.all([
-        db.sale.aggregate({ where: saleWhere(ctx), _sum: { tax: true, total: true } }),
+      const [lines, returned, e] = await Promise.all([
+        db.saleLine.findMany({ where: { sale: saleWhere(ctx), taxAmount: { gt: 0 } }, select: { taxName: true, taxRatePct: true, taxAmount: true, lineTotal: true, sale: { select: { subtotal: true, discount: true } } } }),
+        db.saleReturnLine.findMany({ where: { saleReturn: { createdAt: inPeriod(ctx), locationId: locIn(ctx) }, saleLine: { taxAmount: { gt: 0 } } }, select: { qty: true, value: true, saleLine: { select: { taxName: true, taxRatePct: true, taxAmount: true, qty: true } } } }),
         db.expense.findMany({ where: { expenseDate: inPeriod(ctx), locationId: locIn(ctx), tax: { gt: 0 } }, include: { category: true } }),
       ]);
+      const label = (l: { taxName: string | null; taxRatePct: unknown }) => `${l.taxName ?? "Tax"} ${D(l.taxRatePct as string).toString()}%`;
+      const out = groupSum(lines, label, {
+        tax: (l) => l.taxAmount,
+        // Taxable base = the line's net value (after its share of the invoice discount) without the tax inside it.
+        base: (l) => { const sub = D(l.sale.subtotal); const net = sub.gt(0) ? D(l.lineTotal).minus(D(l.sale.discount).mul(l.lineTotal).div(sub)) : D(l.lineTotal); return net.minus(l.taxAmount); },
+      });
+      const back = groupSum(returned, (r) => label(r.saleLine), {
+        tax: (r) => (D(r.saleLine.qty).gt(0) ? D(r.saleLine.taxAmount).mul(r.qty).div(r.saleLine.qty).neg() : 0),
+        base: (r) => (D(r.saleLine.qty).gt(0) ? D(r.value).minus(D(r.saleLine.taxAmount).mul(r.qty).div(r.saleLine.qty)).neg() : 0),
+      });
       const rows: Row[] = [
-        { doc: "Sales — output tax", base: D(s._sum.total).minus(D(s._sum.tax)), tax: s._sum.tax ?? 0 },
-        ...e.map((x) => ({ doc: `${x.number} · ${x.category.name}`, base: x.amount, tax: x.tax, _href: `/expenses/${x.id}` })),
+        ...[...out.entries()].map(([k, v]) => ({ doc: `Sales — ${k}`, base: v.base, tax: v.tax })),
+        ...[...back.entries()].map(([k, v]) => ({ doc: `Sell returns — ${k}`, base: v.base, tax: v.tax })),
+        ...e.map((x) => ({ doc: `Expense ${x.number} · ${x.category.name} (input tax)`, base: x.amount, tax: D(x.tax).neg(), _href: `/expenses/${x.id}` })),
       ];
-      return { columns: [{ key: "doc", label: "Document" }, { key: "base", label: "Taxable base", kind: "money" }, { key: "tax", label: "Tax", kind: "money" }], rows, notes: ["VAT/SSCL rates must be set up and validated before tax reporting is relied on (spec §26)."] };
+      return {
+        columns: [{ key: "doc", label: "Document" }, { key: "base", label: "Taxable base", kind: "money" }, { key: "tax", label: "Tax", kind: "money" }], rows,
+        totals: totalsOf(rows, ["tax"]),
+        notes: ["The total is output tax less returns less input tax on expenses. Tax on goods bought from suppliers (GRNs) is not recorded in this system — take it from the supplier invoices.", "Have the accountant check the first return prepared from this report against the tax office's rules."],
+      };
     },
   },
   {

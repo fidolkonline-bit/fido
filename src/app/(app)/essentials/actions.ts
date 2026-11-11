@@ -1,5 +1,8 @@
 "use server";
 
+import { randomUUID } from "crypto";
+import { FILES_BUCKET, putFile, removeFiles, storageConfigured } from "@/lib/storage";
+
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
@@ -98,9 +101,17 @@ export async function uploadDocument(_: Res, f: FormData): Promise<Res> {
   const file = f.get("file");
   if (!(file instanceof File) || file.size === 0) return { error: "Choose a file." };
   if (file.size > MAX_BYTES) return { error: "Files must be 4 MB or smaller." };
+  const bytes = Buffer.from(await file.arrayBuffer());
+  const mimeType = file.type || "application/octet-stream";
+  // File storage when it is set up; otherwise the database, as before.
+  let storagePath: string | null = null;
+  if (storageConfigured()) {
+    storagePath = `documents/${randomUUID()}`;
+    await putFile(FILES_BUCKET, storagePath, bytes, mimeType);
+  }
   await db.documentFile.create({
-    data: { name: str(f, "name") ?? file.name, description: str(f, "description"), mimeType: file.type || "application/octet-stream", size: file.size,
-      data: Buffer.from(await file.arrayBuffer()), audience: roles(f), createdById: user.personId },
+    data: { name: str(f, "name") ?? file.name, description: str(f, "description"), mimeType, size: file.size,
+      data: storagePath ? null : bytes, storagePath, audience: roles(f), createdById: user.personId },
   });
   revalidatePath("/essentials/documents");
   return { ok: "Uploaded." };
@@ -108,7 +119,8 @@ export async function uploadDocument(_: Res, f: FormData): Promise<Res> {
 
 export async function removeDocument(f: FormData) {
   await requirePermission("essentials.manage");
-  await db.documentFile.delete({ where: { id: String(f.get("id")) } });
+  const doc = await db.documentFile.delete({ where: { id: String(f.get("id")) }, select: { storagePath: true } });
+  if (doc.storagePath) await removeFiles(FILES_BUCKET, [doc.storagePath]).catch(() => {});
   revalidatePath("/essentials/documents");
 }
 

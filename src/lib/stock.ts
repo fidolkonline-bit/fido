@@ -118,3 +118,9 @@ export async function storeCreditBalance(tx: Tx, contactId: string) {
   const agg = await tx.storeCreditEntry.aggregate({ where: { contactId }, _sum: { amount: true } });
   return D(agg._sum.amount);
 }
+
+// Two receipts typed at the same moment cannot both add the same IMEI: each IMEI is locked for the transaction
+// before the "already in stock" check (sorted, so two transactions never wait on each other in a circle).
+export async function lockImeis(tx: Tx, imeis: string[]) {
+  for (const imei of [...new Set(imeis)].sort()) await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${"imei:" + imei}))`;
+}

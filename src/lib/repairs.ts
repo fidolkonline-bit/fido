@@ -1,6 +1,8 @@
 import "server-only";
+import { randomBytes } from "crypto";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
+import { imeiProblem } from "./imei";
 import { db, posting, type Tx } from "./db";
 import { D, ZERO } from "./money";
 import { nextNumber } from "./numbering";
@@ -81,7 +83,8 @@ export const intakeInput = z.object({
   serviceType: z.enum(["CARRY_IN", "PICKUP", "ON_SITE"]).default("CARRY_IN"),
   deviceBrand: z.string().max(60).nullable().default(null),
   deviceModel: z.string().min(1, "Device model is required.").max(100),
-  imei: z.string().max(20).nullable().default(null),
+  // A customer's phone: a 15-digit IMEI is checked for typos, anything else is kept as written.
+  imei: z.string().max(20).nullable().default(null).superRefine((v, c) => { if (v && /^\d{15}$/.test(v.trim())) { const m = imeiProblem(v); if (m) c.addIssue({ code: "custom", message: m }); } }),
   serial: z.string().max(60).nullable().default(null),
   color: z.string().max(30).nullable().default(null),
   simCount: z.coerce.number().int().min(0).max(4).default(0),
@@ -96,7 +99,27 @@ export const intakeInput = z.object({
   promisedAt: z.coerce.date().nullable().default(null),
   deposit: z.object({ amount: z.coerce.number().positive(), method: z.enum(["CASH", "CARD", "BANK_TRANSFER", "OTHER"]), accountId: z.string().nullable().default(null), reference: z.string().nullable().default(null) }).nullable().default(null),
   notifyCustomer: z.boolean().default(true),
+  // Customer agreement at the counter: ticked terms and (optionally) a signature drawn on the screen.
+  termsAccepted: z.boolean().default(false),
+  signature: z.string().max(80_000).regex(/^data:image\/png;base64,[A-Za-z0-9+/=]+$/, "Signature could not be read.").nullable().default(null),
+  // Warranty claim on something this shop sold (from Warranty lookup).
+  claimSaleLineId: z.string().nullable().default(null),
+  claimDeviceId: z.string().nullable().default(null),
 });
+
+// Repair settings: terms printed on the job sheet and the technician's share of labour.
+export const repairSettingsSchema = z.object({
+  terms: z.string().max(3000).default(
+    "1. The shop is not responsible for data on the device; back it up first.\n2. Devices not collected within 90 days of the ready notice may be disposed of to recover costs.\n3. The estimate may change after diagnosis; no extra work is done without your approval.\n4. Warranty on a repair covers only the part replaced and the work done.\n5. Liquid-damaged and previously repaired devices are accepted at the owner's risk.",
+  ),
+  commissionPct: z.coerce.number().min(0).max(100).default(0),
+});
+export type RepairSettings = z.infer<typeof repairSettingsSchema>;
+export async function getRepairSettings(client: Pick<Tx, "appSetting"> = db): Promise<RepairSettings> {
+  const row = await client.appSetting.findUnique({ where: { key: "repairs" } });
+  const parsed = repairSettingsSchema.safeParse(row?.value ?? {});
+  return parsed.success ? parsed.data : repairSettingsSchema.parse({});
+}
 
 export async function createRepair(user: CurrentUser, raw: unknown) {
   const input = intakeInput.parse(raw);
@@ -109,8 +132,21 @@ export async function createRepair(user: CurrentUser, raw: unknown) {
     const existing = await tx.repairJob.findUnique({ where: { idempotencyKey: input.idempotencyKey } });
     if (existing) return existing;
     const number = await nextNumber(tx, "REPAIR");
+    const settings = await getRepairSettings(tx);
+    // A warranty claim must point at a real sale line of this customer; the warranty date decides the flag.
+    let claim: { saleLineId: string; deviceId: string | null; inWarranty: boolean } | null = null;
+    if (input.claimSaleLineId) {
+      const line = await tx.saleLine.findUnique({ where: { id: input.claimSaleLineId }, include: { sale: true, devices: true } });
+      if (!line) throw new RepairError("The original sale for this warranty claim was not found.");
+      const device = input.claimDeviceId ? line.devices.find((d) => d.id === input.claimDeviceId) ?? null : null;
+      const until = device?.warrantyUntil ?? line.warrantyUntil;
+      claim = { saleLineId: line.id, deviceId: device?.id ?? null, inWarranty: !!until && until.getTime() >= Date.now() };
+    }
     const job = await tx.repairJob.create({
       data: {
+        trackToken: randomBytes(18).toString("base64url"),
+        termsText: input.termsAccepted ? settings.terms : null, termsAcceptedAt: input.termsAccepted ? new Date() : null, signature: input.termsAccepted ? input.signature : null,
+        warrantyClaim: claim?.inWarranty ?? false, originSaleLineId: claim?.saleLineId ?? null, originDeviceId: claim?.deviceId ?? null,
         number, locationId: location.id, customerId: input.customerId, serviceType: input.serviceType,
         deviceBrand: input.deviceBrand, deviceModel: input.deviceModel, imei: input.imei, serial: input.serial, color: input.color,
         simCount: input.simCount, memoryCard: input.memoryCard, accessories: input.accessories, condition: input.condition, problem: input.problem,
@@ -153,6 +189,16 @@ export async function changeStatus(user: CurrentUser, jobId: string, to: string,
     }
     await tx.repairJob.update({ where: { id: jobId }, data });
     await event(tx, jobId, user.personId, "STATUS", { fromStatus: job.status, toStatus: to, note: note ?? undefined });
+    // Technician commission: a share of the labour charged, earned once, when the customer collects. It then goes
+    // through the same approval and payout as sales commission. Free warranty work (no labour) earns nothing.
+    if (to === "COLLECTED" && job.technicianId) {
+      const { commissionPct } = await getRepairSettings(tx);
+      const labour = Prisma.Decimal.max(D(job.labourCharge).minus(job.discount), 0);
+      const amount = labour.mul(commissionPct).div(100).toDecimalPlaces(4);
+      const already = await tx.commissionAccrual.count({ where: { repairJobId: jobId } });
+      if (amount.gt(0) && !already)
+        await tx.commissionAccrual.create({ data: { repairJobId: jobId, recipientId: job.technicianId, role: "TECHNICIAN", basis: labour.toDecimalPlaces(2), amount } });
+    }
     if (to === "COLLECTED" && job.credentialCipher) await event(tx, jobId, user.personId, "CREDENTIAL_PURGED", { note: "Deleted at handover" });
     return job;
   });

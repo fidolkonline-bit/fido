@@ -17,7 +17,7 @@ const r2 = (v: Prisma.Decimal) => v.toDecimalPlaces(2);
 export async function commissionOutstanding(recipientId?: string) {
   const rows = await db.commissionAccrual.findMany({
     where: { settlementId: null, ...(recipientId ? { recipientId } : {}) },
-    include: { recipient: { include: { employee: true } }, saleLine: { include: { sale: true } } },
+    include: { recipient: { include: { employee: true } }, saleLine: { include: { sale: true } }, repairJob: { select: { number: true } } },
     orderBy: { createdAt: "asc" },
   });
   const by = new Map<string, { recipient: (typeof rows)[number]["recipient"]; approved: Prisma.Decimal; pending: Prisma.Decimal; rows: typeof rows }>();

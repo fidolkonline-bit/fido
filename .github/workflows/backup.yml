@@ -1,0 +1,31 @@
+name: Nightly database backup
+
+# 01:30 Sri Lanka time. GitHub pauses scheduled workflows after 60 days without a commit in the repository —
+# Settings › Backups in the app warns when the newest backup is older than 36 hours.
+on:
+  schedule:
+    - cron: "0 20 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: db-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    # Never from a fork: forks have no secrets and must not try.
+    if: github.repository_owner == 'fidolkonline-bit'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dump, encrypt and upload
+        env:
+          BACKUP_DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: scripts/backup.sh

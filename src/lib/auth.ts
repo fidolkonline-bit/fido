@@ -8,9 +8,12 @@ import { db } from "./db";
 import { can, type Permission } from "./permissions";
 
 export { can };
+export { loginLocked, recordLoginAttempt, clientIp } from "./login-guard";
 
 const COOKIE = "fido_session";
 const SESSION_DAYS = 14;
+// A PIN-switched session is for a shift on a shared till, not for two weeks.
+const PIN_SESSION_HOURS = 16;
 
 const hashToken = (t: string) => createHash("sha256").update(t).digest("hex");
 
@@ -27,10 +30,18 @@ export async function verifyPassword(username: string, password: string) {
 
 export const hashPassword = (p: string) => bcrypt.hash(p, 10);
 
-export async function startSession(accountId: string, userAgent?: string | null) {
+// Cashier switch on a signed-in shop device: 4–6 digit PIN, only for people allowed at this location.
+export async function verifyPin(accountId: string, pin: string) {
+  const account = await db.loginAccount.findUnique({ where: { id: accountId }, include: { person: true } });
+  const ok = await bcrypt.compare(pin, account?.pinHash ?? "$2a$10$invalidinvalidinvalidinvalidinvalidinvalidinvalidinva");
+  if (!account || !account.pinHash || !ok || !account.allowLogin || !account.person.active) return null;
+  return account;
+}
+
+export async function startSession(accountId: string, userAgent?: string | null, opts: { viaPin?: boolean; locationId?: string | null } = {}) {
   const token = randomBytes(32).toString("base64url");
-  const expiresAt = new Date(Date.now() + SESSION_DAYS * 86_400_000);
-  const firstLocation = await db.userLocation.findFirst({ where: { accountId }, select: { locationId: true } });
+  const expiresAt = new Date(Date.now() + (opts.viaPin ? PIN_SESSION_HOURS * 3_600_000 : SESSION_DAYS * 86_400_000));
+  const firstLocation = opts.locationId ? { locationId: opts.locationId } : await db.userLocation.findFirst({ where: { accountId }, select: { locationId: true } });
   await db.session.create({
     data: { tokenHash: hashToken(token), accountId, expiresAt, userAgent: userAgent?.slice(0, 200), locationId: firstLocation?.locationId },
   });

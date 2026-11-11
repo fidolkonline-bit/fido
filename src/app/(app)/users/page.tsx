@@ -18,7 +18,7 @@ export default async function Users() {
       <PageHead eyebrow="User Management" title="Users" actions={<Link className="btn btn-primary" href="/users/new">New user</Link>} />
       <DataTable rows={people} rowKey={(p) => p.id}
         columns={[
-          { label: "Person", primary: true, render: (p) => <>{p.fullName}{p.login && <span className="muted small"> · {p.login.username}</span>}</> },
+          { label: "Person", primary: true, render: (p) => <><Link className="rowlink" href={`/users/${p.id}/edit`}>{p.fullName}</Link>{p.login && <span className="muted small"> · {p.login.username}</span>}</> },
           { label: "Role", render: (p) => p.login?.role.name ?? "—" },
           { label: "Login", render: (p) => (p.login?.allowLogin ? <Badge tone="ok">Enabled</Badge> : <Badge>No login</Badge>) },
           { label: "Commission", render: (p) => p.commissionProfile ? ({ USER: "User", AGENT: "Agent", BOTH: "User + agent" } as Record<string, string>)[p.commissionProfile.kind] : "—" },

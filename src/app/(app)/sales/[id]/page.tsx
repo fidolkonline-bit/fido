@@ -2,7 +2,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requirePermission, can } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { D, money, qty, fmtDateTime } from "@/lib/money";
+import { D, money, qty, fmtDateTime, fmtDate } from "@/lib/money";
+import { WhatsAppLink } from "@/components/WhatsAppLink";
 import { PageHead, DataTable, RowLink, Badge } from "@/components/ui";
 import { PrintOnLoad } from "./PrintOnLoad";
 import { Barcode } from "@/components/Barcode";
@@ -28,6 +29,7 @@ export default async function SaleDetail({ params, searchParams }: { params: Pro
       payments: { include: { account: true }, orderBy: { paidAt: "asc" } },
       returns: { orderBy: { createdAt: "asc" } },
       shipments: { orderBy: { createdAt: "asc" } },
+      instalmentPlan: { select: { id: true, number: true } },
       debtAllocations: { include: { collection: { select: { id: true, number: true, method: true, paidAt: true, state: true } } }, orderBy: { collection: { paidAt: "asc" } } },
     },
   });
@@ -52,7 +54,7 @@ export default async function SaleDetail({ params, searchParams }: { params: Pro
           title={sale.number}
           actions={<>{can(user, "returns.create") && sale.lines.some((l) => D(l.returnedQty).lt(l.qty)) && <Link className="btn" href={`/returns/new?sale=${sale.id}`}>Return / exchange</Link>}<Badge tone={sale.paymentState === "PAID" ? "ok" : "warn"}>{sale.paymentState === "PAID" ? "Paid" : sale.paymentState === "PARTIAL" ? "Part paid" : "Due"}</Badge><span className="row" style={{ gap: 4 }}>
             {(["80mm", "58mm", "A4"] as const).map((p) => <Link key={p} className={"btn btn-sm" + (p === paper ? " btn-primary" : "")} href={`?paper=${p}`} replace>{p}</Link>)}
-          </span><PrintOnLoad enabled={print === "1"} /></>}
+          </span><WhatsAppLink phone={sale.customer?.phone} text={`${sale.location.business.name}: thank you for your purchase. Invoice ${sale.number}, total Rs. ${money(sale.total)}${due.gt(0) ? `, balance due Rs. ${money(due)}` : ""}.${sale.lines.filter((l) => l.warrantyUntil).map((l) => ` ${l.nameSnapshot}: warranty until ${fmtDate(l.warrantyUntil)}.`).join("")}`} />{can(user, "instalments.manage") && due.gt(0) && sale.customerId && !sale.instalmentPlan && <Link className="btn" href={`/sales/instalments/new?sale=${sale.id}`}>Instalment plan</Link>}{sale.instalmentPlan && <Link className="btn" href={`/sales/instalments/${sale.instalmentPlan.id}`}>Plan {sale.instalmentPlan.number}</Link>}<PrintOnLoad enabled={print === "1"} /></>}
         />
       </div>
 
@@ -71,7 +73,7 @@ export default async function SaleDetail({ params, searchParams }: { params: Pro
           <div key={l.id} className="totalrow" style={{ fontSize: 13 }}>
             <span>
               {l.nameSnapshot}
-              <br /><span className="muted small">{qty(l.qty)} × {money(l.unitPrice)}{D(l.discount).gt(0) ? ` − ${money(l.discount)}` : ""}{layout.showLot && lots(l) ? ` · Lot ${lots(l)}` : ""}{layout.showWarranty && l.product.warranty ? ` · ${l.product.warranty.name}` : ""}</span>
+              <br /><span className="muted small">{qty(l.qty)} × {money(l.unitPrice)}{D(l.discount).gt(0) ? ` − ${money(l.discount)}` : ""}{layout.showLot && lots(l) ? ` · Lot ${lots(l)}` : ""}{layout.showWarranty && (l.warrantyName ?? l.product.warranty?.name) ? ` · ${l.warrantyName ?? l.product.warranty?.name}${l.warrantyUntil ? ` until ${fmtDate(l.warrantyUntil)}` : ""}` : ""}</span>
               {layout.showImei && l.deviceLabels.length > 0 && <><br /><span className="small" style={{ fontVariantNumeric: "tabular-nums" }}>IMEI/SN {l.deviceLabels.join(", ")}</span></>}
               {D(l.returnedQty).gt(0) && <><br /><span className="small" style={{ color: "var(--warn)" }}>Returned {qty(l.returnedQty)}</span></>}
             </span>
@@ -82,6 +84,7 @@ export default async function SaleDetail({ params, searchParams }: { params: Pro
         {D(sale.discount).gt(0) && <div className="totalrow"><span>Discount</span><strong>−{money(sale.discount)}</strong></div>}
         {!D(sale.rounding).eq(0) && <div className="totalrow"><span>Rounding</span><strong>{money(sale.rounding)}</strong></div>}
         <div className="totalrow grand"><span>Total</span><strong>Rs. {money(sale.total)}</strong></div>
+        {D(sale.tax).gt(0) && <div className="totalrow small"><span>Includes tax{sale.location.business.taxNumber ? ` · Reg. ${sale.location.business.taxNumber}` : ""}</span><strong>{money(sale.tax)}</strong></div>}
         {sale.payments.map((p) => (
           <div key={p.id} className="totalrow small"><span>{p.direction === "OUT" ? "Refunded" : "Paid"} · {p.method.replace("_", " ").toLowerCase()}{p.reference ? ` (${p.reference})` : ""}</span><strong>{p.direction === "OUT" ? "−" : ""}{money(p.amount)}</strong></div>
         ))}
@@ -93,6 +96,7 @@ export default async function SaleDetail({ params, searchParams }: { params: Pro
         ))}
         {due.gt(0) && <div className="totalrow"><span>Balance due</span><strong>{money(due)}</strong></div>}
         {customerDue && customerDue.gt(0) && <div className="totalrow small"><span>Your total balance with us</span><strong>{money(customerDue)}</strong></div>}
+        {sale.loyaltyEarned > 0 && <div className="totalrow small"><span>Loyalty points earned</span><strong>{sale.loyaltyEarned}</strong></div>}
         {layout.footerText && <p className="small muted" style={{ textAlign: "center", marginTop: 14, whiteSpace: "pre-line" }}>{layout.footerText}</p>}
         {layout.showBarcode && <div style={{ textAlign: "center", marginTop: 8 }}><Barcode value={sale.number} height={paper === "58mm" ? 30 : 36} /></div>}
       </div>

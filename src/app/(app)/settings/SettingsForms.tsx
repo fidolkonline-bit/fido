@@ -4,6 +4,7 @@ import { useActionState } from "react";
 import { saveBusiness, addLocation } from "./actions";
 import { SubmitButton } from "@/components/SubmitButton";
 import { changeOwnPassword } from "../users/actions";
+import { setOwnPin } from "../switch/actions";
 
 export function BusinessForm({ name, rounding }: { name: string; rounding: string }) {
   const [state, action] = useActionState(saveBusiness, undefined);
@@ -57,6 +58,27 @@ export function PasswordForm() {
       {state?.error && <p className="note note-err">{state.error}</p>}
       {state?.ok && <p className="note note-ok">{state.ok}</p>}
       <div className="form-actions" style={{ marginTop: 0 }}><SubmitButton>Change password</SubmitButton></div>
+    </form>
+  );
+}
+
+export function PinForm({ hasPin }: { hasPin: boolean }) {
+  const [state, action] = useActionState(setOwnPin, undefined);
+  return (
+    <form action={action} className="panel stack" style={{ maxWidth: 520 }}>
+      <h2 style={{ margin: 0 }}>My PIN (switch cashier)</h2>
+      <p className="small muted" style={{ margin: 0 }}>{hasPin ? "You have a PIN." : "No PIN set."} A PIN only works on a shop device where someone is already signed in — never on the login page.</p>
+      <label className="field"><span>Current password</span><input name="current" type="password" autoComplete="current-password" required /></label>
+      <div className="grid2">
+        <label className="field"><span>New PIN (4–6 digits)</span><input name="pin" type="password" inputMode="numeric" pattern="\d{4,6}" maxLength={6} autoComplete="off" /></label>
+        <label className="field"><span>Confirm PIN</span><input name="confirm" type="password" inputMode="numeric" pattern="\d{4,6}" maxLength={6} autoComplete="off" /></label>
+      </div>
+      {state?.error && <p className="note note-err">{state.error}</p>}
+      {state?.ok && <p className="note note-ok">{state.ok}</p>}
+      <div className="form-actions" style={{ marginTop: 0 }}>
+        {hasPin && <button className="btn" name="remove" value="1" type="submit">Remove PIN</button>}
+        <SubmitButton>Save PIN</SubmitButton>
+      </div>
     </form>
   );
 }

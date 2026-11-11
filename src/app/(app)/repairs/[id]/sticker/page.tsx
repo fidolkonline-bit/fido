@@ -55,6 +55,13 @@ export default async function Sticker({ params, searchParams }: { params: Promis
         <div className="totalrow"><span>Paid</span><strong>{money(job.paid)}</strong></div>
         {due.gt(0) && <div className="totalrow"><span>Balance due</span><strong>{money(due)}</strong></div>}
         {job.warrantyDays ? <p className="small">Repair warranty: {job.warrantyDays} days from collection.</p> : null}
+        {job.termsText && (
+          <div className="small" style={{ marginTop: 10 }}>
+            <p style={{ whiteSpace: "pre-line", margin: "0 0 6px" }}>{job.termsText}</p>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            {job.signature ? <img src={job.signature} alt="Customer signature" style={{ height: 56 }} /> : <span>Accepted by the customer at intake.</span>}
+          </div>
+        )}
         <div style={{ textAlign: "center", marginTop: 8 }}><Barcode value={job.number} height={30} /></div>
       </div>
     </div>

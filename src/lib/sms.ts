@@ -12,6 +12,7 @@ export const SMS_EVENTS = {
   REPAIR_READY: { label: "Repair ready", vars: ["shop", "job", "device", "due"], body: "{shop}: Your {device} (job {job}) is ready to collect.{due}" },
   DEBT_RECEIPT: { label: "Debt payment receipt", vars: ["shop", "receipt", "amount", "balance"], body: "{shop}: Received Rs.{amount} towards your balance. Receipt {receipt}. Balance due Rs.{balance}. Thank you!" },
   RELOAD_DONE: { label: "Reload completed", vars: ["shop", "mobile", "amount", "ref"], body: "{shop}: Reload Rs.{amount} to {mobile} successful. Ref {ref}." },
+  INSTALMENT_DUE: { label: "Instalment reminder", vars: ["shop", "amount", "date", "invoice"], body: "{shop}: Reminder — your instalment of Rs.{amount} for invoice {invoice} is due on {date}. Thank you." },
   TASK_ESCALATION: { label: "Staff task overdue (to staff)", vars: ["shop", "task"], body: "{shop} URGENT: {task} has not been acknowledged. Please open the Fido app now." },
 } as const;
 export type SmsEvent = keyof typeof SMS_EVENTS;

@@ -5,6 +5,7 @@ import type { Permission } from "./permissions";
 export type NavItem = { label: string; href: string; perm?: Permission; phase?: string };
 export type NavGroup = { key: string; label: string; items: NavItem[]; isNew?: boolean };
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const soon = (label: string, slug: string, phase: string): NavItem => ({ label, href: `/planned/${slug}`, phase });
 
 export const NAV: NavGroup[] = [
@@ -46,6 +47,8 @@ export const NAV: NavGroup[] = [
       { label: "Receive goods / GRN", href: "/purchases", perm: "purchases.view" },
       { label: "Purchase orders", href: "/purchases/orders", perm: "purchases.view" },
       { label: "Supplier returns / recovery", href: "/purchases/returns", perm: "purchases.view" },
+      { label: "Trade-ins / used phones", href: "/trade-ins", perm: "purchases.view" },
+      { label: "Reorder suggestions", href: "/purchases/reorder", perm: "purchases.view" },
     ],
   },
   {
@@ -59,10 +62,12 @@ export const NAV: NavGroup[] = [
       { label: "Subscriptions", href: "/sales/subscriptions", perm: "sales.create" },
       { label: "Shipments", href: "/sales/shipments", perm: "sales.view" },
       { label: "Discount rules", href: "/sales/discounts", perm: "products.manage" },
+      { label: "Warranty lookup", href: "/warranty", perm: "sales.view" },
+      { label: "Instalment plans", href: "/sales/instalments", perm: "sales.view" },
     ],
   },
   { key: "transfers", label: "Stock Transfers", items: [{ label: "Stock transfers", href: "/transfers", perm: "products.view" }] },
-  { key: "adjustments", label: "Stock Adjustment", items: [{ label: "Stock adjustments", href: "/adjustments", perm: "products.view" }] },
+  { key: "adjustments", label: "Stock Adjustment", items: [{ label: "Stock adjustments", href: "/adjustments", perm: "products.view" }, { label: "Stock take", href: "/stock-counts", perm: "products.view" }] },
   { key: "expenses", label: "Expenses", items: [{ label: "Expenses", href: "/expenses", perm: "expenses.view" }, { label: "Recurring expenses", href: "/expenses/recurring", perm: "expenses.manage" }] },
   {
     key: "accounts", label: "Payment Accounts",
@@ -90,7 +95,12 @@ export const NAV: NavGroup[] = [
       { label: "Invoice layouts & printers", href: "/settings/printing", perm: "settings.manage" },
       { label: "Label sizes", href: "/settings/labels", perm: "settings.manage" },
       { label: "Selling price tiers", href: "/settings/price-groups", perm: "pricing.manage" },
-      soon("Tax / service / modifiers", "tax", "D"),
+      { label: "Tax", href: "/settings/tax", perm: "settings.manage" },
+      { label: "Loyalty points", href: "/settings/loyalty", perm: "settings.manage" },
+      { label: "Repair terms & commission", href: "/settings/repairs", perm: "settings.manage" },
+      { label: "Audit log", href: "/settings/audit", perm: "settings.manage" },
+      { label: "Error log", href: "/settings/errors", perm: "settings.manage" },
+      { label: "Backups & file storage", href: "/settings/backups", perm: "settings.manage" },
     ],
   },
   {
