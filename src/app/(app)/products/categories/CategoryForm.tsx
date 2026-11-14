@@ -3,6 +3,7 @@
 import { useActionState, useState } from "react";
 import { saveCategory } from "./actions";
 import { SubmitButton } from "@/components/SubmitButton";
+import { SearchSelect } from "@/components/SearchSelect";
 
 type Cat = { id: string; name: string; parentId: string | null; poolRate: string; userShare: string; agentShare: string };
 
@@ -17,9 +18,9 @@ export function CategoryForm({ parents, edit }: { parents: { id: string; name: s
       {edit && <input type="hidden" name="id" value={edit.id} />}
       <div className="grid2">
         <label className="field"><span>Name</span><input name="name" defaultValue={edit?.name} required /></label>
-        <label className="field"><span>Parent category</span>
-          <select name="parentId" defaultValue={edit?.parentId ?? ""}><option value="">— Top level —</option>{parents.filter((p) => p.id !== edit?.id).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
-        </label>
+        <div className="field"><span>Parent category</span>
+          <SearchSelect name="parentId" label="Parent category" options={parents} defaultValue={edit?.parentId} placeholder="Search parent categories…" noneLabel="— Top level —" />
+        </div>
       </div>
       <div className="grid3">
         <label className="field"><span>Commission pool %</span><input name="poolRate" type="number" step="0.0001" min="0" max="100" inputMode="decimal" value={pool} onChange={(e) => setPool(Number(e.target.value))} /></label>

@@ -12,7 +12,7 @@ export default async function Tax() {
   const [business, rates, categories, overrides] = await Promise.all([
     db.business.findFirstOrThrow(),
     db.taxRate.findMany({ orderBy: [{ active: "desc" }, { name: "asc" }], include: { _count: { select: { products: true } } } }),
-    db.category.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
+    db.category.findMany({ where: { active: true }, orderBy: { name: "asc" }, select: { id: true, name: true } }),
     db.product.count({ where: { taxRateId: { not: null } } }),
   ]);
   return (
