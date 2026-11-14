@@ -4,6 +4,7 @@ import { useActionState } from "react";
 import Link from "next/link";
 import { saveProduct } from "./actions";
 import { SubmitButton } from "@/components/SubmitButton";
+import { SearchSelect } from "@/components/SearchSelect";
 
 type Opt = { id: string; name: string };
 type Product = {
@@ -27,12 +28,12 @@ export function ProductForm({ product, categories, brands, units, warranties, sh
         <label className="field"><span>Product name *</span><input name="name" defaultValue={p?.name} required /></label>
         <label className="field"><span>SKU *</span><input name="sku" defaultValue={p?.sku} required autoCapitalize="characters" /></label>
         <label className="field"><span>Barcode</span><input name="barcode" defaultValue={p?.barcode ?? ""} inputMode="numeric" /></label>
-        <label className="field"><span>Category</span>
-          <select name="categoryId" defaultValue={p?.categoryId ?? ""}><option value="">— None —</option>{categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
-        </label>
-        <label className="field"><span>Brand</span>
-          <select name="brandId" defaultValue={p?.brandId ?? ""}><option value="">— None —</option>{brands.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
-        </label>
+        <div className="field"><span>Category</span>
+          <SearchSelect name="categoryId" label="Category" options={categories} defaultValue={p?.categoryId} placeholder="Search categories…" />
+        </div>
+        <div className="field"><span>Brand</span>
+          <SearchSelect name="brandId" label="Brand" options={brands} defaultValue={p?.brandId} placeholder="Search brands…" />
+        </div>
         <label className="field"><span>Unit</span>
           <select name="unitId" defaultValue={p?.unitId ?? ""}><option value="">— None —</option>{units.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
         </label>

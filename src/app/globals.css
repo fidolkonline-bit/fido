@@ -350,3 +350,19 @@ table.dt { width: 100%; border-collapse: collapse; font-size: 13px; }
 .alloc .num { text-align: right; }
 .alloc input { width: 110px; min-height: 32px; text-align: right; }
 @media (max-width: 480px) { .debt-strip { grid-template-columns: 1fr 1fr; } .modal-scrim { padding: 8px; } }
+
+/* Search-and-select dropdown (SearchSelect.tsx) */
+.searchselect { position: relative; }
+.searchselect > input { padding-right: 34px; }
+.searchselect-clear { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); min-height: 30px; width: 30px; padding: 0; border: 0; background: transparent; color: var(--muted); font-size: 18px; line-height: 1; }
+.searchselect-clear:hover { color: var(--ink); }
+.searchselect-list {
+  position: absolute; left: 0; right: 0; top: calc(100% + 2px); z-index: 15; max-height: 280px; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius); box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+}
+.searchselect-opt { padding: 9px 10px; font-size: 14px; color: var(--ink); cursor: pointer; }
+.searchselect-opt.muted { color: var(--muted); }
+.searchselect-opt.is-active { background: var(--wash); }
+.searchselect-opt[aria-selected="true"] { font-weight: 600; }
+.searchselect-opt mark { background: transparent; color: var(--accent); font-weight: 600; }
+.searchselect-empty { padding: 9px 10px; font-size: 13px; color: var(--muted); }
