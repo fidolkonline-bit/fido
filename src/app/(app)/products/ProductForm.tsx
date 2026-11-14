@@ -41,13 +41,13 @@ export function ProductForm({ product, categories, brands, units, warranties, sh
 
       <h2 style={{ margin: "6px 0 0" }}>Pricing</h2>
       <div className="grid3">
-        <label className="field"><span>Selling price (Rs.)</span><input name="sellPrice" type="number" step="0.01" min="0" inputMode="decimal" defaultValue={p?.sellPrice ?? "0"} /></label>
-        <label className="field"><span>Minimum selling price</span><input name="minSellPrice" type="number" step="0.01" min="0" inputMode="decimal" defaultValue={p?.minSellPrice ?? ""} /></label>
         {showCost ? (
           <label className="field"><span>Default purchase cost</span><input name="defaultCost" type="number" step="0.0001" min="0" inputMode="decimal" defaultValue={p?.defaultCost ?? "0"} /></label>
         ) : (
           <input type="hidden" name="defaultCost" value={p?.defaultCost ?? "0"} />
         )}
+        <label className="field"><span>Selling price (Rs.)</span><input name="sellPrice" type="number" step="0.01" min="0" inputMode="decimal" defaultValue={p?.sellPrice ?? "0"} /></label>
+        <label className="field"><span>Minimum selling price</span><input name="minSellPrice" type="number" step="0.01" min="0" inputMode="decimal" defaultValue={p?.minSellPrice ?? ""} /></label>
       </div>
 
       {tiers.length > 0 && (
