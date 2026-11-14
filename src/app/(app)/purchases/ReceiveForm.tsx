@@ -1,9 +1,12 @@
 "use client";
 
-import { useState, useTransition, useRef } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { searchProducts, type ProductHit } from "../search";
-import { submitReceipt } from "./actions";
+import { type ProductHit } from "../search";
+import { submitReceipt, productCostHistory, type CostHistoryRow } from "./actions";
+import { ProductSearch } from "@/components/ProductSearch";
+import { SearchSelect } from "@/components/SearchSelect";
+import { CameraScanner } from "@/components/CameraScan";
 
 type Line = { key: string; poLineId?: string; due?: number; product: ProductHit; lotCode: string; qtyReceived: string; qtyRejected: string; unitCost: string; newSellPrice: string; devicesText: string; condition: "NEW" | "USED" };
 
@@ -30,23 +33,22 @@ export function ReceiveForm({ suppliers, accounts, order, parcelId = null }: { s
     key: l.poLineId, poLineId: l.poLineId, due: l.due, product: l.product, lotCode: "", qtyReceived: String(l.due), qtyRejected: "0",
     unitCost: l.unitCost, newSellPrice: "", devicesText: "", condition: "NEW" as const,
   })));
-  const [q, setQ] = useState("");
-  const [hits, setHits] = useState<ProductHit[]>([]);
+  const [scanFor, setScanFor] = useState<string | null>(null);
   const [payNow, setPayNow] = useState(false);
   const [pay, setPay] = useState({ amount: "", method: "CASH", accountId: "", reference: "" });
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
-  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
-  const search = (v: string) => {
-    setQ(v);
-    clearTimeout(timer.current);
-    timer.current = setTimeout(async () => setHits(v.trim() ? await searchProducts(v, false) : []), 200);
-  };
   const add = (p: ProductHit) => {
     setLines((ls) => [...ls, { key: crypto.randomUUID(), product: p, lotCode: "", qtyReceived: "1", qtyRejected: "0", unitCost: p.cost ?? "0", newSellPrice: "", devicesText: "", condition: "NEW" }]);
-    setQ(""); setHits([]);
   };
+  // Each camera read of an IMEI / serial label goes on its own row of that line's device list (duplicates skipped).
+  const addDevice = (k: string, code: string) => setLines((ls) => ls.map((l) => {
+    if (l.key !== k) return l;
+    const rows = l.devicesText.split(/\n+/).map((r) => r.trim()).filter(Boolean);
+    if (rows.some((r) => r.split(/[,\s]+/).includes(code))) return l;
+    return { ...l, devicesText: [...rows, code].join("\n") };
+  }));
   const update = (k: string, patch: Partial<Line>) => setLines((ls) => ls.map((l) => (l.key === k ? { ...l, ...patch } : l)));
   const total = lines.reduce((a, l) => a + (n(l.qtyReceived) - n(l.qtyRejected)) * n(l.unitCost), 0);
 
@@ -71,28 +73,15 @@ export function ReceiveForm({ suppliers, accounts, order, parcelId = null }: { s
     <div className="stack">
       <section className="panel grid2">
         <label className="field"><span>Supplier *</span>
-          <select value={supplierId} onChange={(e) => setSupplierId(e.target.value)} required disabled={!!order}>
-            <option value="">Select supplier…</option>
-            {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
+          <SearchSelect name="supplierId" label="Supplier" options={suppliers} defaultValue={supplierId} onChange={setSupplierId}
+            disabled={!!order} placeholder="Search supplier…" noneLabel="Select supplier…" />
         </label>
         <label className="field"><span>Supplier invoice / reference</span><input value={supplierRef} onChange={(e) => setSupplierRef(e.target.value)} /></label>
       </section>
 
       <section className="panel stack">
         <h2 style={{ margin: 0 }}>Items received</h2>
-        <div style={{ position: "relative" }}>
-          <input value={q} onChange={(e) => search(e.target.value)} placeholder="Scan or search product to add" aria-label="Add product" />
-          {hits.length > 0 && (
-            <div className="panel" style={{ position: "absolute", left: 0, right: 0, top: "100%", zIndex: 10, padding: 0, maxHeight: 280, overflowY: "auto" }}>
-              {hits.map((h) => (
-                <button key={h.id} type="button" onClick={() => add(h)} className="btn-ghost" style={{ width: "100%", justifyContent: "space-between", borderRadius: 0, borderBottom: "1px solid var(--rule)" }}>
-                  <span>{h.sku} · {h.name}</span><span className="muted small">{h.available ?? "—"} in stock</span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+        <ProductSearch onPick={add} />
         {lines.length === 0 && <p className="muted small" style={{ margin: 0 }}>No items yet. Lot codes are free text; the same code may appear on different products.</p>}
         {lines.map((l) => {
           const accepted = n(l.qtyReceived) - n(l.qtyRejected);
@@ -110,7 +99,8 @@ export function ReceiveForm({ suppliers, accounts, order, parcelId = null }: { s
                   return (
                     <>
                       <label className="field" style={{ gridColumn: "1 / -1" }}>
-                        <span>IMEI / serial — one device per line (IMEI 1, IMEI 2) · {count} of {accepted} entered</span>
+                        <span style={{ display: "flex", alignItems: "center", gap: 8 }}>IMEI / serial — one device per line (IMEI 1, IMEI 2) · {count} of {accepted} entered
+                          <button type="button" className="btn btn-sm" style={{ marginLeft: "auto" }} onClick={(e) => { e.preventDefault(); setScanFor(l.key); }}>Scan IMEIs</button></span>
                         <textarea value={l.devicesText} onChange={(e) => update(l.key, { devicesText: e.target.value })} inputMode="numeric" rows={Math.min(Math.max(accepted, 2), 8)}
                           style={{ fontVariantNumeric: "tabular-nums", borderColor: count !== accepted ? "var(--warn)" : undefined }} placeholder={"356789012345678\n356789012345679, 356789012345680"} />
                       </label>
@@ -120,12 +110,15 @@ export function ReceiveForm({ suppliers, accounts, order, parcelId = null }: { s
                     </>
                   );
                 })()}
+                <CostHistory productId={l.product.id} unitCost={n(l.unitCost)} sellPrice={l.newSellPrice === "" ? n(l.product.price) : n(l.newSellPrice)} />
                 <div className="field"><span>Accepted → stock</span><strong style={{ fontSize: 15, color: "var(--ink)", paddingTop: 10 }}>{accepted} × {fmt(n(l.unitCost))} = {fmt(accepted * n(l.unitCost))}</strong></div>
               </div>
             </div>
           );
         })}
       </section>
+
+      {scanFor && <CameraScanner keepOpen onCode={(c) => addDevice(scanFor, c)} onClose={() => setScanFor(null)} />}
 
       <section className="panel stack">
         <div className="totalrow grand"><span>Receipt total (accepted)</span><strong>Rs. {fmt(total)}</strong></div>
@@ -152,6 +145,53 @@ export function ReceiveForm({ suppliers, accounts, order, parcelId = null }: { s
           <button className="btn btn-primary" type="button" disabled={pending || !supplierId || lines.length === 0} onClick={submit}>{pending ? "Posting…" : "Post receipt"}</button>
         </div>
       </section>
+    </div>
+  );
+}
+
+const day = (iso: string) => new Date(iso).toLocaleDateString("en-LK", { day: "numeric", month: "short", year: "numeric" });
+const pct = (v: number) => `${v > 0 ? "+" : ""}${v.toFixed(1)}%`;
+
+// Previous GRN costs for this product, shown under the line so the new cost (and any new selling price) can be judged
+// against what was paid last time. Empty for staff who cannot see costs.
+function CostHistory({ productId, unitCost, sellPrice }: { productId: string; unitCost: number; sellPrice: number }) {
+  const [rows, setRows] = useState<CostHistoryRow[] | null>(null);
+  const [more, setMore] = useState(false);
+  useEffect(() => {
+    let live = true;
+    productCostHistory(productId).then((r) => { if (live) setRows(r); }).catch(() => { if (live) setRows([]); });
+    return () => { live = false; };
+  }, [productId]);
+
+  const margin = sellPrice > 0 ? ((sellPrice - unitCost) / sellPrice) * 100 : null;
+  const marginText = margin === null ? null : <>Margin at Rs. {fmt(sellPrice)}: <strong style={{ color: margin < 0 ? "var(--err)" : undefined }}>{margin.toFixed(1)}%</strong></>;
+
+  if (rows === null) return <div className="small muted" style={{ gridColumn: "1 / -1" }}>Loading cost history…</div>;
+  if (rows.length === 0) return <div className="small muted" style={{ gridColumn: "1 / -1" }}>No earlier receipts for this product.{marginText && <> {marginText}</>}</div>;
+
+  const last = rows[0];
+  const lastCost = Number(last.unitCost);
+  const change = lastCost > 0 ? ((unitCost - lastCost) / lastCost) * 100 : null;
+  return (
+    <div className="small" style={{ gridColumn: "1 / -1", background: "var(--wash)", borderRadius: 8, padding: "8px 10px" }}>
+      <div className="row" style={{ gap: 12, flexWrap: "wrap" }}>
+        <span>Last cost: <strong>Rs. {fmt(lastCost)}</strong> <span className="muted">on {day(last.at)} · {last.number} · {last.supplier}</span></span>
+        {change !== null && Math.abs(change) >= 0.05 && (
+          <span className={`badge ${change > 0 ? "badge-warn" : "badge-ok"}`}>{change > 0 ? "▲" : "▼"} {pct(change)} vs last</span>
+        )}
+        {marginText && <span>{marginText}</span>}
+        {rows.length > 1 && <button type="button" className="btn btn-sm btn-ghost" style={{ marginLeft: "auto" }} onClick={() => setMore((m) => !m)}>{more ? "Hide" : `Last ${rows.length} receipts`}</button>}
+      </div>
+      {more && (
+        <table className="dt" style={{ marginTop: 6 }}>
+          <thead><tr><th>Date</th><th>GRN</th><th>Supplier</th><th className="num">Qty</th><th className="num">Unit cost</th><th className="num">Sell price set</th></tr></thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.number + r.at + r.unitCost}><td>{day(r.at)}</td><td>{r.number}</td><td>{r.supplier}</td><td className="num">{Number(r.qty)}</td><td className="num">{fmt(Number(r.unitCost))}</td><td className="num">{r.newSellPrice ? fmt(Number(r.newSellPrice)) : "—"}</td></tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 }

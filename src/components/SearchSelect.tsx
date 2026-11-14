@@ -6,8 +6,9 @@ export type SearchOption = { id: string; name: string };
 
 // Type-to-filter dropdown that submits the chosen id through a hidden input, so it drops into a plain <form>.
 // Matches every word typed, anywhere in the name ("sam gal" finds "Samsung › Galaxy"); best matches first.
-export function SearchSelect({ name, options, defaultValue, placeholder = "Search…", noneLabel = "— None —", label }: {
+export function SearchSelect({ name, options, defaultValue, placeholder = "Search…", noneLabel = "— None —", label, onChange, disabled = false }: {
   name: string; options: SearchOption[]; defaultValue?: string | null; placeholder?: string; noneLabel?: string; label: string;
+  onChange?: (id: string) => void; disabled?: boolean;
 }) {
   const [value, setValue] = useState(defaultValue ?? "");
   const [q, setQ] = useState("");
@@ -51,6 +52,7 @@ export function SearchSelect({ name, options, defaultValue, placeholder = "Searc
 
   const choose = (o: SearchOption | null) => {
     setValue(o?.id ?? "");
+    onChange?.(o?.id ?? "");
     setQ("");
     setOpen(false);
     input.current?.blur();
@@ -74,6 +76,7 @@ export function SearchSelect({ name, options, defaultValue, placeholder = "Searc
         aria-autocomplete="list"
         aria-activedescendant={open && rows[active] !== undefined ? `${listId}-${active}` : undefined}
         autoComplete="off"
+        disabled={disabled}
         value={open ? q : selected?.name ?? ""}
         placeholder={open ? (selected?.name ?? placeholder) : noneLabel}
         onFocus={startOpen}
@@ -87,7 +90,7 @@ export function SearchSelect({ name, options, defaultValue, placeholder = "Searc
           else if (e.key === "Tab") { setOpen(false); setQ(""); }
         }}
       />
-      {selected && !open && (
+      {selected && !open && !disabled && (
         <button type="button" className="searchselect-clear" aria-label={`Clear ${label}`} onClick={() => choose(null)}>×</button>
       )}
       {open && (
