@@ -11,13 +11,13 @@ export const metadata = { title: "POS" };
 export default async function PosPage({ searchParams }: { searchParams: Promise<{ customer?: string; draft?: string }> }) {
   const user = await requirePermission("sales.create");
   const loc = user.location;
-  const register = loc ? await db.registerSession.findFirst({ where: { locationId: loc.id, userId: user.personId, closedAt: null } }) : null;
+  const register = loc ? await db.registerSession.findFirst({ where: { locationId: loc.id, closedAt: null } }) : null;
 
   if (!register) {
     return (
       <div className="stack" style={{ maxWidth: 560 }}>
         <PageHead eyebrow={`Sell / ${loc?.name ?? ""}`} title="POS" />
-        <p className="note">Your cash register at {loc?.name ?? "this location"} is closed. Open it with your starting cash before selling.</p>
+        <p className="note">The cash register at {loc?.name ?? "this location"} is closed. Count the cash in the drawer and open it before selling.</p>
         {can(user, "register.operate") && <div><Link className="btn btn-primary" href="/register">Open register</Link></div>}
       </div>
     );

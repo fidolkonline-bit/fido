@@ -6,6 +6,7 @@ import { D, ZERO } from "./money";
 import { nextNumber } from "./numbering";
 import { deriveLayer } from "./stock";
 import type { CurrentUser } from "./auth";
+import { requireDrawer } from "./register";
 
 export const DISPOSITIONS = {
   SALEABLE: "Back to saleable stock (original lot)",
@@ -209,9 +210,7 @@ export async function postReturn(user: CurrentUser, raw: unknown) {
         const method = input.refund?.method ?? "CASH";
         let registerId: string | null = null;
         if (method === "CASH") {
-          const reg = await tx.registerSession.findFirst({ where: { locationId: location.id, userId: user.personId, closedAt: null } });
-          if (!reg) throw new ReturnError("Open your cash register to give a cash refund.");
-          registerId = reg.id;
+          registerId = await requireDrawer(tx, location.id, "Open the cash register to give a cash refund.");
         }
         let accountId = input.refund?.accountId ?? null;
         if (!accountId) {

@@ -6,6 +6,7 @@ import { nextNumber } from "./numbering";
 import type { CurrentUser } from "./auth";
 import type { Tx } from "./db";
 import { attachCheque } from "./payments";
+import { openDrawer } from "./register";
 
 const paymentSchema = z.object({
   amount: z.coerce.number().positive(),
@@ -34,8 +35,7 @@ async function payOut(tx: Tx, user: CurrentUser, expense: { id: string; contactI
   let accountId = raw.accountId;
   if (raw.method === "CASH") {
     // Cash paid from the drawer reduces the register's expected cash.
-    const reg = await tx.registerSession.findFirst({ where: { locationId: expense.locationId, userId: user.personId, closedAt: null } });
-    registerId = reg?.id ?? null;
+    registerId = await openDrawer(tx, expense.locationId);
     if (!accountId) accountId = (await tx.account.findFirst({ where: { type: "CASH", active: true, locationId: expense.locationId } }))?.id ?? null;
   }
   if (!accountId) throw new ExpenseError("Choose the account the money is paid from.");

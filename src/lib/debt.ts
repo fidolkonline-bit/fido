@@ -9,6 +9,7 @@ import type { CurrentUser } from "./auth";
 import { attachCheque, chequeSchema } from "./payments";
 import { storeCreditBalance } from "./stock";
 import { ACCOUNT_TYPES, DEFAULT_TYPE, OPENING, checkAllocation, defaultAccount, orderObligations, suggestAllocation, type Allocation, type Obligation } from "./debt-rules";
+import { requireDrawer } from "./register";
 
 // Customer debt and repayment at the POS (CR-03). The ledger is read from posted records only: FINAL invoices and the
 // opening balance, less linked payments and return credits. Drafts, quotes and carts are never debt.
@@ -136,9 +137,7 @@ async function receivingAccount(tx: Tx, user: CurrentUser, method: string, accou
 }
 
 async function openRegister(tx: Tx, user: CurrentUser, locationId: string) {
-  const reg = await tx.registerSession.findFirst({ where: { locationId, userId: user.personId, closedAt: null } });
-  if (!reg) throw new DebtError("Open your cash register to take cash.");
-  return reg.id;
+  return requireDrawer(tx, locationId, "Open the cash register to take cash.");
 }
 
 // Paid-on: today means now; an earlier business date needs debt.backdate; the future is never allowed.
@@ -311,9 +310,7 @@ export async function reverseDebtPayment(user: CurrentUser, collectionId: string
     await undoCollection(tx, c.id);
     let registerId: string | null = null;
     if (c.method === "CASH" && c.registerId) {
-      const reg = await tx.registerSession.findFirst({ where: { locationId: c.locationId, userId: user.personId, closedAt: null } });
-      if (!reg) throw new DebtError("Open your cash register at this receipt's location to pay the cash back.");
-      registerId = reg.id;
+      registerId = await requireDrawer(tx, c.locationId, "Open the cash register at this receipt's location to pay the cash back.");
     }
     await tx.payment.create({
       data: {

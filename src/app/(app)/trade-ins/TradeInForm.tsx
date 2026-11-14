@@ -88,7 +88,7 @@ export function TradeInForm({ products, accounts, registerOpen }: { products: Op
           {f.settlement !== "STORE_CREDIT" && <label className="field"><span>Reference</span><input value={f.reference} onChange={(e) => set("reference", e.target.value)} /></label>}
         </div>
         {f.settlement === "STORE_CREDIT" && <p className="small muted" style={{ margin: 0 }}>The value becomes store credit for this customer. At the POS choose the same customer and pay with Store credit; they pay only the difference.</p>}
-        {f.settlement === "CASH" && !registerOpen && <p className="note note-err">Your cash register is not open. Open it first, or pay by another method.</p>}
+        {f.settlement === "CASH" && !registerOpen && <p className="note note-err">The cash register is not open. Open it first, or pay by another method.</p>}
         <label className="check"><input type="checkbox" checked={checks.readyToSell} onChange={(e) => setChecks({ ...checks, readyToSell: e.target.checked })} /> Already checked and cleaned — put it straight on sale</label>
         {!checks.readyToSell && <p className="small muted" style={{ margin: 0 }}>Otherwise the phone is held for checking and is released under Stock adjustments › Release held stock.</p>}
       </section>

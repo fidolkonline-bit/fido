@@ -1,6 +1,7 @@
 import { db } from "../db";
 import type { ReportDef, Row, Ctx } from "./types";
 import { D, ZERO, sum, inPeriod, locIn, totalsOf, groupSum } from "./util";
+import { VARIANCE_REASONS } from "../register";
 
 const methodName = (m: string) => m.toLowerCase().replace("_", " ");
 
@@ -37,16 +38,36 @@ export async function balances(ctx: Ctx) {
 export const moneyReports: ReportDef[] = [
   {
     id: "RP-13", slug: "registers", title: "Registers", group: "Money & balances", perm: "register.review",
-    basis: "Register sessions opened in the period. Expected cash counts only cash; card, bank and cheque are listed separately.",
+    basis: "Day-end cash settlements opened in the period, one shared drawer per location. Expected cash counts only cash (opening + cash in − cash out, before the hand-over); card, bank and cheque on sales are listed separately. Owner / bank cash taken out during the day or at close is shown on its own.",
     async run(ctx) {
-      const regs = await db.registerSession.findMany({ where: { openedAt: inPeriod(ctx), locationId: locIn(ctx) }, include: { user: true, location: true, payments: true, sales: { include: { payments: true } } }, orderBy: { openedAt: "asc" } });
-      const rows: Row[] = regs.map((r) => {
-        const cashIn = sum(r.payments.filter((p) => p.direction === "IN"), (p) => p.amount);
-        const cashOut = sum(r.payments.filter((p) => p.direction === "OUT"), (p) => p.amount);
-        const nonCash = sum(r.sales.flatMap((s) => s.payments).filter((p) => p.method !== "CASH" && p.method !== "STORE_CREDIT" && p.direction === "IN"), (p) => p.amount);
-        return { opened: r.openedAt, closed: r.closedAt, location: r.location.name, user: r.user.fullName, opening: r.openingCash, cashIn, cashOut, expected: r.expectedCash ?? D(r.openingCash).plus(cashIn).minus(cashOut), counted: r.countedCash, variance: r.variance, nonCash, notes: r.notes ?? "", _tone: r.variance && !D(r.variance).eq(0) ? "err" : undefined };
+      const regs = await db.registerSession.findMany({
+        where: { openedAt: inPeriod(ctx), locationId: locIn(ctx) },
+        include: { user: true, closedBy: true, location: true, payments: { where: { method: "CASH" }, include: { registerMovement: true } }, sales: { include: { payments: true } } },
+        orderBy: { openedAt: "asc" },
       });
-      return { columns: [{ key: "opened", label: "Opened", kind: "datetime" }, { key: "closed", label: "Closed", kind: "datetime" }, { key: "location", label: "Location" }, { key: "user", label: "Operator" }, { key: "opening", label: "Opening", kind: "money" }, { key: "cashIn", label: "Cash in", kind: "money" }, { key: "cashOut", label: "Cash out", kind: "money" }, { key: "expected", label: "Expected", kind: "money" }, { key: "counted", label: "Counted", kind: "money" }, { key: "variance", label: "Variance", kind: "money" }, { key: "nonCash", label: "Card/bank/cheque", kind: "money" }, { key: "notes", label: "Notes" }], rows, totals: totalsOf(rows, ["cashIn", "cashOut", "variance", "nonCash"]) };
+      const rows: Row[] = regs.map((r) => {
+        const day = r.payments.filter((p) => !p.registerMovement?.atClose);
+        const cashIn = sum(day.filter((p) => p.direction === "IN"), (p) => p.amount);
+        const cashOut = sum(day.filter((p) => p.direction === "OUT"), (p) => p.amount);
+        const taken = sum(r.payments.filter((p) => p.registerMovement && p.direction === "OUT" && ["OWNER_TOOK", "BANK_DEPOSIT"].includes(p.registerMovement.reason)), (p) => p.amount);
+        const nonCash = sum(r.sales.flatMap((s) => s.payments).filter((p) => p.method !== "CASH" && p.method !== "STORE_CREDIT" && p.direction === "IN"), (p) => p.amount);
+        const reason = [r.varianceReason ? VARIANCE_REASONS[r.varianceReason] ?? r.varianceReason : "", r.notes ?? ""].filter(Boolean).join(" · ");
+        return {
+          opened: r.openedAt, closed: r.closedAt, location: r.location.name, user: r.user.fullName, closedBy: r.closedBy?.fullName ?? (r.closedAt ? r.user.fullName : ""),
+          opening: r.openingCash, cashIn, cashOut, expected: r.expectedCash ?? D(r.openingCash).plus(cashIn).minus(cashOut), counted: r.countedCash, variance: r.variance,
+          reason, taken, left: r.cashLeft ?? r.countedCash, nonCash, _href: `/register/${r.id}`, _tone: r.variance && !D(r.variance).eq(0) ? "err" : undefined,
+        };
+      });
+      return {
+        columns: [
+          { key: "opened", label: "Opened", kind: "datetime" }, { key: "closed", label: "Closed", kind: "datetime" }, { key: "location", label: "Location" },
+          { key: "user", label: "Opened by" }, { key: "closedBy", label: "Closed by" }, { key: "opening", label: "Opening", kind: "money" },
+          { key: "cashIn", label: "Cash in", kind: "money" }, { key: "cashOut", label: "Cash out", kind: "money" }, { key: "expected", label: "Expected", kind: "money" },
+          { key: "counted", label: "Counted", kind: "money" }, { key: "variance", label: "Difference", kind: "money" }, { key: "reason", label: "Reason / note" },
+          { key: "taken", label: "Owner / bank", kind: "money" }, { key: "left", label: "Left in drawer", kind: "money" }, { key: "nonCash", label: "Card/bank/cheque", kind: "money" },
+        ],
+        rows, totals: totalsOf(rows, ["cashIn", "cashOut", "variance", "taken", "nonCash"]),
+      };
     },
   },
   {

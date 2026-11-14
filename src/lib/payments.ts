@@ -4,6 +4,7 @@ import { posting, type Tx } from "./db";
 import { D } from "./money";
 import { nextNumber } from "./numbering";
 import type { CurrentUser } from "./auth";
+import { requireDrawer } from "./register";
 
 export class PaymentError extends Error {}
 
@@ -36,9 +37,7 @@ export async function attachCheque(tx: Tx, paymentId: string, direction: "RECEIV
 async function resolveAccount(tx: Tx, user: CurrentUser, method: string, accountId: string | null, locationId: string) {
   let registerId: string | null = null;
   if (method === "CASH") {
-    const reg = await tx.registerSession.findFirst({ where: { locationId, userId: user.personId, closedAt: null } });
-    if (!reg) throw new PaymentError("Open your cash register to take or pay cash.");
-    registerId = reg.id;
+    registerId = await requireDrawer(tx, locationId, "Open the cash register to take or pay cash.");
   }
   if (!accountId) {
     const type = method === "CASH" ? "CASH" : method === "CARD" ? "CARD" : "BANK";

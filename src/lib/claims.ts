@@ -6,6 +6,7 @@ import { D, ZERO } from "./money";
 import { nextNumber } from "./numbering";
 import { allocateDevices, deriveLayer, takeFromLayer, type Pick } from "./stock";
 import type { CurrentUser } from "./auth";
+import { openDrawer } from "./register";
 
 export class ClaimError extends Error {}
 
@@ -121,7 +122,7 @@ export async function settleClaim(user: CurrentUser, raw: unknown) {
       let registerId: string | null = null;
       let accountId = input.refund.accountId;
       if (input.refund.method === "CASH") {
-        registerId = (await tx.registerSession.findFirst({ where: { locationId: claim.locationId, userId: user.personId, closedAt: null } }))?.id ?? null;
+        registerId = await openDrawer(tx, claim.locationId);
         accountId ??= (await tx.account.findFirst({ where: { type: "CASH", active: true, locationId: claim.locationId } }))?.id ?? null;
       }
       if (!accountId) throw new ClaimError("Choose the account the refund was paid into.");

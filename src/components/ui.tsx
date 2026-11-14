@@ -61,7 +61,7 @@ export function RowLink({ href, children }: { href: string; children: ReactNode 
   return <Link className="rowlink" href={href}>{children}</Link>;
 }
 
-export function Stat({ label, value, basis }: { label: string; value: ReactNode; basis?: string }) {
+export function Stat({ label, value, basis }: { label: string; value: ReactNode; basis?: ReactNode }) {
   return <div className="stat">{label}<strong>{value}</strong>{basis}</div>;
 }
 

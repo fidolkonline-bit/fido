@@ -6,6 +6,7 @@ import { nextNumber } from "./numbering";
 import { createTask, completeTask } from "./tasks";
 import { enqueueSms, kickSms, normalizeMobile } from "./sms";
 import type { CurrentUser } from "./auth";
+import { openDrawer, requireDrawer } from "./register";
 
 export class ReloadError extends Error {}
 
@@ -30,7 +31,7 @@ export async function fundWallet(user: CurrentUser, raw: unknown) {
     let registerId: string | null = null;
     if (input.method === "CASH") {
       const loc = w.locationId ?? user.location?.id;
-      registerId = (await tx.registerSession.findFirst({ where: { locationId: loc, userId: user.personId, closedAt: null } }))?.id ?? null;
+      registerId = await openDrawer(tx, loc);
       accountId ??= (await tx.account.findFirst({ where: { type: "CASH", active: true, locationId: loc } }))?.id ?? null;
     }
     if (!accountId) throw new ReloadError("Choose the account the funding was paid from.");
@@ -129,9 +130,7 @@ export async function recordOutcome(user: CurrentUser, id: string, raw: { result
     const product = await tx.product.upsert({ where: { sku: "RELOAD" }, update: {}, create: { sku: "RELOAD", name: "Mobile reload", stockManaged: false, notForSale: true } });
     let registerId: string | null = null;
     if (r.collection === "SHOP") {
-      const reg = await tx.registerSession.findFirst({ where: { locationId: r.locationId, userId: user.personId, closedAt: null } });
-      if (!reg) throw new ReloadError("Open your cash register to take the reload cash.");
-      registerId = reg.id;
+      registerId = await requireDrawer(tx, r.locationId, "Open the cash register to take the reload cash.");
     }
     const number = await nextNumber(tx, "SALE");
     const paid = r.collection === "CREDIT" ? D(0) : amount;

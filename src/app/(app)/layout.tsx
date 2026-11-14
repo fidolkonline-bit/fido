@@ -11,7 +11,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // Hide destinations the role cannot open; the server still enforces every permission.
   const nav = NAV.map((g) => ({ ...g, items: g.items.filter((i) => !i.perm || user.permissions.has(i.perm)) })).filter((g) => g.items.length);
   const registerOpen = user.location
-    ? !!(await db.registerSession.findFirst({ where: { locationId: user.location.id, userId: user.personId, closedAt: null }, select: { id: true } }))
+    ? !!(await db.registerSession.findFirst({ where: { locationId: user.location.id, closedAt: null }, select: { id: true } }))
     : false;
 
   const t = (await cookies()).get("fido_theme")?.value;

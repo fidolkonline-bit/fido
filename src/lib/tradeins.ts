@@ -6,6 +6,7 @@ import { nextNumber } from "./numbering";
 import { imeiProblem } from "./imei";
 import { lockImeis } from "./stock";
 import type { CurrentUser } from "./auth";
+import { requireDrawer } from "./register";
 
 export class TradeInError extends Error {}
 
@@ -98,10 +99,8 @@ export async function createTradeIn(user: CurrentUser, raw: unknown) {
       let accountId = input.accountId;
       let registerId: string | null = null;
       if (input.settlement === "CASH") {
-        // Cash leaves this cashier's drawer, so the register must be open and its expected cash drops.
-        const reg = await tx.registerSession.findFirst({ where: { locationId: location.id, userId: user.personId, closedAt: null } });
-        if (!reg) throw new TradeInError("Open your cash register before paying cash for a trade-in.");
-        registerId = reg.id;
+        // Cash leaves the shop drawer, so the register must be open and its expected cash drops.
+        registerId = await requireDrawer(tx, location.id, "Open the cash register before paying cash for a trade-in.");
         if (!accountId) accountId = (await tx.account.findFirst({ where: { type: "CASH", active: true, OR: [{ locationId: location.id }, { locationId: null }] }, orderBy: { createdAt: "asc" } }))?.id ?? null;
       }
       if (!accountId) throw new TradeInError("Choose the account the money is paid from.");

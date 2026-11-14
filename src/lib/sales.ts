@@ -14,6 +14,7 @@ import { resolvePrice } from "./price-rules";
 import { debtOf } from "./debt";
 import { checkDiscountLimits } from "./discount-limits";
 import { getLoyalty, pointsFor } from "./loyalty";
+import { requireDrawer } from "./register";
 
 export const saleInput = z.object({
   idempotencyKey: z.string().min(8).max(80),
@@ -65,10 +66,7 @@ export async function finalizeSale(user: CurrentUser, raw: unknown) {
     const existing = await tx.sale.findUnique({ where: { idempotencyKey: input.idempotencyKey }, select: { id: true, number: true } });
     if (existing) return existing;
 
-    const register = await tx.registerSession.findFirst({
-      where: { locationId: location.id, userId: user.personId, closedAt: null },
-    });
-    if (!register) throw new SaleError("Open your cash register before selling.");
+    const register = { id: await requireDrawer(tx, location.id, "Open the cash register before selling.") };
 
     const business = await tx.business.findFirstOrThrow();
     const products = await tx.product.findMany({

@@ -17,6 +17,7 @@ const backupHealth = unstable_cache(async () => {
   }
 }, ["backup-health"], { revalidate: 3600 });
 import { PageHead, DataTable, Stat, Badge, RowLink } from "@/components/ui";
+import { DrawerCard } from "./register/DrawerCard";
 
 export const metadata = { title: "Home" };
 
@@ -26,14 +27,13 @@ export default async function Home() {
   const since = colomboDayStart();
   const scope = loc ? { locationId: loc.id } : {};
 
-  const [salesToday, collectedToday, dueAgg, recent, register, products] = await Promise.all([
+  const [salesToday, collectedToday, dueAgg, recent, products] = await Promise.all([
     db.sale.aggregate({ where: { ...scope, stage: "FINAL", soldAt: { gte: since } }, _sum: { total: true }, _count: true }),
     db.payment.aggregate({ where: { direction: "IN", method: { not: "STORE_CREDIT" }, paidAt: { gte: since }, sale: loc ? { locationId: loc.id } : undefined }, _sum: { amount: true } }),
     db.sale.aggregate({ where: { ...scope, stage: "FINAL", paymentState: { not: "PAID" } }, _sum: { total: true, paid: true, credited: true }, _count: true }),
     can(user, "sales.view")
       ? db.sale.findMany({ where: scope, orderBy: { soldAt: "desc" }, take: 8, include: { customer: true } })
       : Promise.resolve([]),
-    loc ? db.registerSession.findFirst({ where: { locationId: loc.id, userId: user.personId, closedAt: null } }) : null,
     db.product.findMany({ where: { active: true, stockManaged: true, alertQty: { gt: 0 } }, select: { id: true, sku: true, name: true, alertQty: true } }),
   ]);
 
@@ -59,7 +59,6 @@ export default async function Home() {
         title="Shop desk"
         actions={
           <>
-            {can(user, "register.operate") && !register && <Link className="btn" href="/register">Open register</Link>}
             {can(user, "sales.create") && <Link className="btn btn-primary" href="/pos">New sale</Link>}
           </>
         }
@@ -71,6 +70,8 @@ export default async function Home() {
         <Stat label="Customer dues" value={`Rs. ${money(dues)}`} basis={`${dueAgg._count} unpaid / part-paid invoices`} />
         <Stat label="Low stock" value={`${low.length} items`} basis="At or below alert level" />
       </div>
+
+      {(can(user, "register.operate") || can(user, "register.review")) && <DrawerCard user={user} />}
 
       <div className="stats">
         {can(user, "repairs.view") && <Link href="/repairs" style={{ textDecoration: "none" }}><Stat label="Repairs in progress" value={repairsOpen} basis="Open jobs" /></Link>}

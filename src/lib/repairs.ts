@@ -11,6 +11,7 @@ import { seal, unseal } from "./vault";
 import { can } from "./permissions";
 import { enqueueSms, kickSms } from "./sms";
 import type { CurrentUser } from "./auth";
+import { requireDrawer } from "./register";
 
 export class RepairError extends Error {}
 
@@ -50,9 +51,7 @@ async function recompute(tx: Tx, jobId: string) {
 }
 
 async function cashRegister(tx: Tx, user: CurrentUser, locationId: string) {
-  const reg = await tx.registerSession.findFirst({ where: { locationId, userId: user.personId, closedAt: null } });
-  if (!reg) throw new RepairError("Open your cash register to take cash.");
-  return reg.id;
+  return requireDrawer(tx, locationId, "Open the cash register to take cash.");
 }
 
 async function recordPayment(tx: Tx, user: CurrentUser, job: { id: string; customerId: string; locationId: string; number: string }, raw: { amount: number; method: string; accountId?: string | null; reference?: string | null }) {

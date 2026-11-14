@@ -11,7 +11,7 @@ export default async function NewTradeIn() {
   const [products, accounts, register] = await Promise.all([
     db.product.findMany({ where: { active: true, trackDevices: true, stockManaged: true }, orderBy: { name: "asc" }, select: { id: true, name: true } }),
     db.account.findMany({ where: { active: true, type: { not: "CASH" } }, orderBy: { name: "asc" }, select: { id: true, name: true } }),
-    loc ? db.registerSession.findFirst({ where: { locationId: loc.id, userId: user.personId, closedAt: null }, select: { id: true } }) : null,
+    loc ? db.registerSession.findFirst({ where: { locationId: loc.id, closedAt: null }, select: { id: true } }) : null,
   ]);
   return (
     <div style={{ maxWidth: 900 }}>

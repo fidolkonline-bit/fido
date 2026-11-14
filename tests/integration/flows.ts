@@ -13,6 +13,7 @@ import { postReturn } from "../../src/lib/returns";
 import { availability, storeCreditBalance } from "../../src/lib/stock";
 import { loginLocked, recordLoginAttempt } from "../../src/lib/login-guard";
 import type { CurrentUser } from "../../src/lib/auth";
+import { DENOMINATIONS, closeRegister, drawerSummary, openRegister, recordMovement } from "../../src/lib/register";
 
 if (!/127\.0\.0\.1|localhost/.test(process.env.DATABASE_URL ?? "")) throw new Error("Refusing to run: DATABASE_URL is not a local database.");
 
@@ -32,7 +33,7 @@ async function main() {
   const cover = await db.product.findUniqueOrThrow({ where: { sku: "D-101" } });
   const charger = await db.product.findUniqueOrThrow({ where: { sku: "D-102" } });
   const cashAcct = await db.account.findFirstOrThrow({ where: { type: "CASH" } });
-  if (!(await db.registerSession.findFirst({ where: { userId: acct.personId, closedAt: null } })))
+  if (!(await db.registerSession.findFirst({ where: { locationId: loc.id, closedAt: null } })))
     await db.registerSession.create({ data: { locationId: loc.id, userId: acct.personId, openingCash: 50000 } });
   const lotOf = async (productId: string) => (await db.costLayer.findFirstOrThrow({ where: { productId, bucket: "SALEABLE", qtyRemaining: { gt: 0 } }, orderBy: { receivedAt: "asc" } })).id;
   const sale = (user: CurrentUser, o: Record<string, unknown>) => finalizeSale(user, { idempotencyKey: randomUUID(), customerId: null, payments: [], ...o });
@@ -152,6 +153,55 @@ async function main() {
     await changeStatus(owner, j.id, "COLLECTED", null);
     const acc = await db.commissionAccrual.findMany({ where: { repairJobId: j.id } });
     assert.equal(acc.length, 1); assert.equal(acc[0].role, "TECHNICIAN"); assert.equal(acc[0].amount.toFixed(2), "900.00");
+  });
+
+  await step("shared cash drawer: cash in/out, count with reason, hand-over and next opening", async () => {
+    const counts = (amount: number) => {
+      const c: Record<string, number> = {};
+      let left = amount;
+      for (const d of DENOMINATIONS) { const n = Math.floor(left / d); if (n) c[d] = n; left -= n * d; }
+      assert.equal(left, 0);
+      return c;
+    };
+    const other = await db.person.create({ data: { fullName: "Second cashier" } });
+    const second: CurrentUser = { ...cashier, personId: other.id, name: other.fullName };
+    const drawer = await db.registerSession.findFirstOrThrow({ where: { locationId: loc.id, closedAt: null } });
+    const before = await drawerSummary(db, drawer.id);
+    // A different cashier sells into the same drawer.
+    const r = await sale(second, { lines: [{ productId: cover.id, qty: 1, unitPrice: 2000, lots: [{ layerId: await lotOf(cover.id), qty: 1 }] }], payments: [{ method: "CASH", amount: 2000 }] });
+    assert.equal((await db.sale.findUniqueOrThrow({ where: { id: r.id } })).registerId, drawer.id);
+    await fails(() => openRegister(owner, { openingCash: 100, note: null }), /already open/);
+    await fails(() => recordMovement(owner, { reason: "OWNER_TOOK", amount: 1e9, note: null }), /should only hold/);
+    await recordMovement(owner, { reason: "OWNER_TOOK", amount: 1000, note: "lunch money" });
+    await recordMovement(second, { reason: "FLOAT_IN", amount: 300, note: null });
+    const mid = await drawerSummary(db, drawer.id);
+    assert.equal(mid.expected.toFixed(2), before.expected.plus(2000).minus(1000).plus(300).toFixed(2));
+    assert.ok(mid.outBy.some((x) => x.label === "Owner took cash" && x.amount.eq(1000)));
+    const expected = Number(mid.expected);
+    // Short by 500: a reason and a note are required.
+    const base = { registerId: drawer.id, counts: counts(expected - 500), cashLeft: 5000, handoverReason: "OWNER_TOOK" };
+    await fails(() => closeRegister(second, { ...base, varianceReason: null, notes: null }), /Choose the reason/);
+    await fails(() => closeRegister(second, { ...base, varianceReason: "WRONG_CHANGE", notes: null }), /Write a note/);
+    await fails(() => closeRegister(second, { ...base, cashLeft: expected + 1, varianceReason: "WRONG_CHANGE", notes: "x" }), /between 0 and the counted/);
+    const res = await closeRegister(second, { ...base, varianceReason: "WRONG_CHANGE", notes: "gave 500 too much change" });
+    assert.equal(res.variance.toFixed(2), "-500.00");
+    assert.equal(res.handover.toFixed(2), (expected - 500 - 5000).toFixed(2));
+    const closed = await db.registerSession.findUniqueOrThrow({ where: { id: drawer.id } });
+    assert.equal(closed.closedById, other.id); assert.equal(closed.varianceReason, "WRONG_CHANGE"); assert.equal(closed.cashLeft?.toFixed(2), "5000.00");
+    const after = await drawerSummary(db, drawer.id);
+    assert.equal(after.expected.toFixed(2), mid.expected.toFixed(2));       // hand-over is not part of expected cash
+    assert.equal(after.handedOver.toFixed(2), res.handover.toFixed(2));
+    await fails(() => closeRegister(owner, { ...base, varianceReason: "OTHER", notes: "x" }), /already closed/);
+    // Drawer closed: no cash sales, no cash in/out.
+    const lot = await lotOf(cover.id);
+    await fails(() => sale(owner, { lines: [{ productId: cover.id, qty: 1, unitPrice: 2000, lots: [{ layerId: lot, qty: 1 }] }], payments: [{ method: "CASH", amount: 2000 }] }), /Open the cash register/);
+    await fails(() => recordMovement(owner, { reason: "FLOAT_IN", amount: 10, note: null }), /closed/);
+    // Next opening is checked against what was left.
+    await fails(() => openRegister(owner, { openingCash: 4000, note: null }), /Write a note/);
+    const [a, b] = await Promise.allSettled([openRegister(owner, { openingCash: 5000, note: null }), openRegister(second, { openingCash: 5000, note: null })]);
+    assert.equal([a, b].filter((x) => x.status === "fulfilled").length, 1);  // only one drawer opens
+    const next = await db.registerSession.findFirstOrThrow({ where: { locationId: loc.id, closedAt: null } });
+    assert.equal(next.expectedOpening?.toFixed(2), "5000.00");
   });
 
   await step("login lock after 5 wrong tries, cleared by a good one", async () => {

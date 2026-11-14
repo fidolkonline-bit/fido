@@ -101,7 +101,9 @@ model Person {
   accruals              CommissionAccrual[]
   movements             StockMovement[]
   receipts              GoodsReceipt[]
-  registers             RegisterSession[]
+  registers             RegisterSession[]      @relation("RegisterOpener")
+  registersClosed       RegisterSession[]      @relation("RegisterCloser")
+  registerMovements     RegisterMovement[]
   payments              Payment[]
   audits                AuditEvent[]
   returns               SaleReturn[]
@@ -1717,11 +1719,13 @@ model Payment {
   collectionId String?
   collection   DebtCollection? @relation(fields: [collectionId], references: [id], onDelete: Restrict)
 
-  cheque     Cheque?
+  cheque           Cheque?
+  // Cash put into or taken out of the drawer by hand (owner took cash, change float added…).
+  registerMovement RegisterMovement?
   // A bounced cheque is reversed by an opposite payment pointing back at the original.
-  reversesId String?  @unique
-  reverses   Payment? @relation("PaymentReversal", fields: [reversesId], references: [id])
-  reversedBy Payment? @relation("PaymentReversal")
+  reversesId       String?           @unique
+  reverses         Payment?          @relation("PaymentReversal", fields: [reversesId], references: [id])
+  reversedBy       Payment?          @relation("PaymentReversal")
 
   @@index([paidAt])
   @@index([collectionId])
@@ -1783,25 +1787,61 @@ model DebtAllocation {
   @@index([collectionId])
 }
 
+// One shared cash drawer per location: at most one open session per location at a time (partial unique index
+// "RegisterSession_one_open_per_location" in migration 20261114120000 — keep it if a later diff proposes dropping it).
+// Anyone allowed to operate the register at that location takes cash into it; one person counts and settles it.
 model RegisterSession {
-  id            String           @id @default(cuid())
-  locationId    String
-  location      Location         @relation(fields: [locationId], references: [id])
-  userId        String
-  user          Person           @relation(fields: [userId], references: [id])
-  openingCash   Decimal          @db.Decimal(14, 2)
-  openedAt      DateTime         @default(now())
-  closedAt      DateTime?
-  expectedCash  Decimal?         @db.Decimal(14, 2)
-  countedCash   Decimal?         @db.Decimal(14, 2)
-  variance      Decimal?         @db.Decimal(14, 2)
-  denominations Json?
-  notes         String?
-  sales         Sale[]
-  payments      Payment[]
-  collections   DebtCollection[]
+  id              String             @id @default(cuid())
+  locationId      String
+  location        Location           @relation(fields: [locationId], references: [id])
+  // Who opened the drawer.
+  userId          String
+  user            Person             @relation("RegisterOpener", fields: [userId], references: [id])
+  openingCash     Decimal            @db.Decimal(14, 2)
+  // What the previous close at this location left in the drawer; when the opening count differs, openingNote says why.
+  expectedOpening Decimal?           @db.Decimal(14, 2)
+  openingNote     String?
+  openedAt        DateTime           @default(now())
+  closedAt        DateTime?
+  closedById      String?
+  closedBy        Person?            @relation("RegisterCloser", fields: [closedById], references: [id])
+  expectedCash    Decimal?           @db.Decimal(14, 2)
+  countedCash     Decimal?           @db.Decimal(14, 2)
+  variance        Decimal?           @db.Decimal(14, 2)
+  denominations   Json?
+  // Required when the count differs from the expected cash: OWNER_TOOK, WRONG_CHANGE, UNRECORDED_EXPENSE,
+  // UNRECORDED_SALE, COUNTING_ERROR, OTHER (see src/lib/register.ts). The note explains it.
+  varianceReason  String?
+  notes           String?
+  // Counted cash left in the drawer for the next day; the rest was handed over (an at-close RegisterMovement OUT).
+  cashLeft        Decimal?           @db.Decimal(14, 2)
+  sales           Sale[]
+  payments        Payment[]
+  collections     DebtCollection[]
+  movements       RegisterMovement[]
 
   @@index([locationId, closedAt])
+}
+
+// Cash put into or taken out of the open drawer by hand, with a reason. Each one is also a cash payment on the
+// register so expected cash and the cash account move with it; it is never a sale or an expense.
+model RegisterMovement {
+  id          String          @id @default(cuid())
+  registerId  String
+  register    RegisterSession @relation(fields: [registerId], references: [id])
+  direction   String // IN, OUT
+  reason      String // OUT: OWNER_TOOK, BANK_DEPOSIT, OTHER_OUT · IN: FLOAT_IN, OWNER_ADDED, OTHER_IN
+  amount      Decimal         @db.Decimal(14, 2)
+  note        String?
+  // True for the hand-over made while closing: it happens after the count, so it is not part of expected cash.
+  atClose     Boolean         @default(false)
+  paymentId   String          @unique
+  payment     Payment         @relation(fields: [paymentId], references: [id])
+  createdById String
+  createdBy   Person          @relation(fields: [createdById], references: [id])
+  createdAt   DateTime        @default(now())
+
+  @@index([registerId])
 }
 
 // ───────────── Audit ─────────────

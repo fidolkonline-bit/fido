@@ -6,6 +6,7 @@ import { nextNumber } from "./numbering";
 import { attendance, dateOnly, dateOnlyYmd, salaryOn, HrError } from "./hr";
 import type { CurrentUser } from "./auth";
 import { attachCheque } from "./payments";
+import { openDrawer } from "./register";
 
 export type PayLine = { kind: "EARNING" | "DEDUCTION"; label: string; amount: string; source: "COMPONENT" | "COMMISSION" | "LEAVE" | "MANUAL" | "TARGET"; note?: string; refIds?: string[] };
 
@@ -46,7 +47,7 @@ export async function payCommissionDirect(user: CurrentUser, recipientId: string
     let accountId = raw.accountId;
     let registerId: string | null = null;
     if (raw.method === "CASH") {
-      registerId = (await tx.registerSession.findFirst({ where: { userId: user.personId, closedAt: null } }))?.id ?? null;
+      registerId = await openDrawer(tx, user.location?.id);
       accountId ??= (await tx.account.findFirst({ where: { type: "CASH", active: true, locationId: user.location?.id } }))?.id ?? null;
     }
     if (!accountId) throw new HrError("Choose the account the commission is paid from.");
@@ -226,7 +227,7 @@ export async function payPayslip(user: CurrentUser, payslipId: string, raw: { am
     let accountId = raw.accountId;
     let registerId: string | null = null;
     if (raw.method === "CASH") {
-      registerId = (await tx.registerSession.findFirst({ where: { userId: user.personId, closedAt: null } }))?.id ?? null;
+      registerId = await openDrawer(tx, user.location?.id);
       accountId ??= (await tx.account.findFirst({ where: { type: "CASH", active: true, locationId: user.location?.id } }))?.id ?? null;
     }
     if (!accountId) throw new HrError("Choose the account salary is paid from.");
