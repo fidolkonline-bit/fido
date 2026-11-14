@@ -12,7 +12,7 @@ export default async function Discounts() {
   await requirePermission("products.manage");
   const [rules, categories, brands, products, locations] = await Promise.all([
     db.discountRule.findMany({ orderBy: [{ active: "desc" }, { priority: "asc" }] }),
-    db.category.findMany({ where: { active: true }, orderBy: { name: "asc" } }), db.brand.findMany({ orderBy: { name: "asc" } }),
+    db.category.findMany({ where: { active: true }, orderBy: { name: "asc" } }), db.brand.findMany({ where: { active: true }, orderBy: { name: "asc" } }),
     db.product.findMany({ where: { active: true, notForSale: false }, orderBy: { name: "asc" }, select: { id: true, name: true, sku: true }, take: 500 }),
     db.location.findMany({ where: { active: true } }),
   ]);
