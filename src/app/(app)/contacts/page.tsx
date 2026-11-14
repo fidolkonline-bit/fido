@@ -1,105 +1,42 @@
 import Link from "next/link";
-import type { Prisma } from "@prisma/client";
 import { requirePermission, can } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { D, money, fmtDate } from "@/lib/money";
+import { money, fmtDate } from "@/lib/money";
+import { contactFilters, isFiltered, listContacts, statsOf, dueOf, IDLE_OPTIONS } from "@/lib/contact-list";
 import { PageHead, DataTable, RowLink, Tabs, Pager, PAGE_SIZE, pageOf } from "@/components/ui";
 
 export const metadata = { title: "Contacts" };
 
 type Params = { type?: string; q?: string; page?: string; bal?: string; group?: string; idle?: string; sort?: string };
-type Dec = Prisma.Decimal;
-
-const DAY = 86_400_000;
-const IDLE_OPTIONS: Record<string, string> = { "30": "30 days", "90": "3 months", "180": "6 months", "365": "a year" };
-
-// Dues = opening + posted documents − settlements (spec §17.1), plus each contact's last activity and store credit.
-async function balancesFor(ids: string[], supplier: boolean) {
-  if (supplier) {
-    const [grnAgg, claimAgg] = await Promise.all([
-      db.goodsReceipt.groupBy({ by: ["supplierId"], where: { supplierId: { in: ids }, status: "POSTED" }, _sum: { total: true, paid: true }, _max: { receivedAt: true } }),
-      db.supplierClaim.groupBy({ by: ["supplierId"], where: { supplierId: { in: ids }, status: "SETTLED" }, _sum: { creditAmount: true } }),
-    ]);
-    const claimCredit = new Map(claimAgg.map((r) => [r.supplierId, D(r._sum.creditAmount)]));
-    // Payable = posted GRNs − payments − supplier credit notes from settled claims.
-    return {
-      docDue: new Map(grnAgg.map((r) => [r.supplierId, D(r._sum.total).minus(D(r._sum.paid)).minus(claimCredit.get(r.supplierId) ?? 0)])),
-      last: new Map(grnAgg.map((r) => [r.supplierId, r._max.receivedAt])),
-      credit: new Map<string, Dec>(),
-    };
-  }
-  const [saleAgg, creditAgg] = await Promise.all([
-    db.sale.groupBy({ by: ["customerId"], where: { customerId: { in: ids }, stage: "FINAL" }, _sum: { total: true, paid: true, credited: true }, _max: { soldAt: true } }),
-    db.storeCreditEntry.groupBy({ by: ["contactId"], where: { contactId: { in: ids } }, _sum: { amount: true } }),
-  ]);
-  return {
-    docDue: new Map(saleAgg.map((r) => [r.customerId as string, D(r._sum.total).minus(D(r._sum.paid)).minus(D(r._sum.credited))])),
-    last: new Map(saleAgg.map((r) => [r.customerId as string, r._max.soldAt])),
-    credit: new Map(creditAgg.map((r) => [r.contactId, D(r._sum.amount)])),
-  };
-}
 
 export default async function Contacts({ searchParams }: { searchParams: Promise<Params> }) {
   const user = await requirePermission("contacts.view");
-  const { type = "customer", q, page: pageParam, bal = "", group = "", idle = "", sort = "name" } = await searchParams;
-  const page = pageOf(pageParam);
+  const sp = await searchParams;
+  const f = contactFilters(sp);
+  const { type, q, bal, group, idle, sort } = f;
+  const page = pageOf(sp.page);
   const supplier = type === "supplier";
-  const where: Prisma.ContactWhereInput = {
-    active: true,
-    ...(supplier ? { isSupplier: true } : { isCustomer: true }),
-    ...(!supplier && group === "none" ? { groupId: null } : !supplier && group ? { groupId: group } : {}),
-    ...(!supplier && bal === "over" ? { creditLimit: { not: null } } : {}),
-    ...(q ? { OR: [{ name: { contains: q, mode: "insensitive" } }, { phone: { contains: q } }, { code: { equals: q, mode: "insensitive" } }, { company: { contains: q, mode: "insensitive" } }] } : {}),
-  };
-  const orderBy: Prisma.ContactOrderByWithRelationInput[] = sort === "newest" ? [{ createdAt: "desc" }, { id: "asc" }] : [{ name: "asc" }, { id: "asc" }];
-
-  const dueOf = (c: { id: string; openingBalance: Dec; openingPaid: Dec }, docDue: Map<string, Dec>) =>
-    D(c.openingBalance).minus(supplier ? 0 : c.openingPaid).plus(docDue.get(c.id) ?? 0);
-
-  // Balance filters and "highest due" need every matching contact's balance, so those are filtered and paged here;
-  // plain browsing stays paged in the database.
-  const needsBalances = Boolean(bal || idle || sort === "due");
-  let pageIds: string[] | null = null;
-  let hasNext: boolean | undefined;
-  let summary: { count: number; total: Dec } | null = null;
-  if (needsBalances) {
-    const all = await db.contact.findMany({ where, orderBy, select: { id: true, openingBalance: true, openingPaid: true, creditLimit: true } });
-    const b = await balancesFor(all.map((c) => c.id), supplier);
-    const idleDays = Number(idle);
-    const cutoff = idleDays > 0 ? new Date(Date.now() - idleDays * DAY) : null;
-    let rows = all.map((c) => ({ id: c.id, due: dueOf(c, b.docDue), limit: c.creditLimit, last: b.last.get(c.id) ?? null, credit: b.credit.get(c.id) ?? D(0) }));
-    if (bal === "due") rows = rows.filter((r) => r.due.gt(0));
-    if (bal === "advance") rows = supplier ? rows.filter((r) => r.due.lt(0)) : rows.filter((r) => r.credit.gt(0) || r.due.lt(0));
-    if (bal === "over") rows = rows.filter((r) => r.limit != null && r.due.gt(r.limit));
-    if (bal === "clear") rows = rows.filter((r) => r.due.eq(0));
-    if (idle === "never") rows = rows.filter((r) => !r.last);
-    else if (cutoff) rows = rows.filter((r) => r.last && r.last < cutoff);
-    if (sort === "due") rows.sort((a, z) => z.due.comparedTo(a.due));
-    if (bal === "due" || bal === "over") summary = { count: rows.length, total: rows.reduce((a, r) => a.plus(r.due), D(0)) };
-    pageIds = rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE).map((r) => r.id);
-    hasNext = rows.length > page * PAGE_SIZE;
-  }
-
-  const found = pageIds
-    ? await db.contact.findMany({ where: { id: { in: pageIds } }, include: { group: true } })
-    : await db.contact.findMany({ where, orderBy, skip: (page - 1) * PAGE_SIZE, take: PAGE_SIZE + 1, include: { group: true } });
-  const contacts = pageIds ? pageIds.map((id) => found.find((c) => c.id === id)!).filter(Boolean) : found.slice(0, PAGE_SIZE);
-  hasNext ??= !pageIds && found.length > PAGE_SIZE;
-  const [b, groups] = await Promise.all([
-    balancesFor(contacts.map((c) => c.id), supplier),
+  const [{ contacts, stats, hasNext, summary }, groups] = await Promise.all([
+    listContacts(f, page, PAGE_SIZE),
     supplier ? Promise.resolve([]) : db.customerGroup.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
   ]);
 
-  const filtered = Boolean(q || bal || group || idle || sort !== "name");
+  const filtered = isFiltered(f);
   const noun = supplier ? "suppliers" : "customers";
   const lastLabel = supplier ? "Last purchase" : "Last sale";
+  const exportQuery = new URLSearchParams(Object.entries({ type, q, bal, group, idle, sort }).filter(([, v]) => v)).toString();
+  const canExport = can(user, "reports.view");
 
   return (
     <div>
       <PageHead
         eyebrow="Contacts"
         title={supplier ? "Suppliers" : "Customers"}
-        actions={can(user, "contacts.manage") && <Link className="btn btn-primary" href={`/contacts/new?type=${type}`}>New {supplier ? "supplier" : "customer"}</Link>}
+        actions={<>
+          {canExport && <a className="btn" href={`/api/contacts/export?format=xlsx&${exportQuery}`} download>Export Excel</a>}
+          {canExport && <a className="btn" href={`/api/contacts/export?format=pdf&${exportQuery}`} download>Export PDF</a>}
+          {can(user, "contacts.manage") && <Link className="btn btn-primary" href={`/contacts/new?type=${type}`}>New {supplier ? "supplier" : "customer"}</Link>}
+        </>}
       />
       <Tabs items={[
         { label: "Customers", href: "/contacts?type=customer", active: !supplier },
@@ -162,15 +99,15 @@ export default async function Contacts({ searchParams }: { searchParams: Promise
           {
             label: supplier ? "We owe" : "Due", num: true,
             render: (c) => {
-              const due = dueOf(c, b.docDue);
+              const due = dueOf(c, stats, supplier);
               return <span style={{ color: due.gt(0) ? "var(--err)" : undefined }}>{money(due)}</span>;
             },
           },
           ...(supplier ? [] : [
-            { label: "Store credit", num: true, render: (c: (typeof contacts)[number]) => { const cr = b.credit.get(c.id); return cr?.gt(0) ? money(cr) : "—"; } },
+            { label: "Store credit", num: true, render: (c: (typeof contacts)[number]) => { const cr = statsOf(stats, c.id).storeCredit; return cr.gt(0) ? money(cr) : "—"; } },
             { label: "Credit limit", num: true, render: (c: (typeof contacts)[number]) => (c.creditLimit ? money(c.creditLimit) : "No limit") },
           ]),
-          { label: lastLabel, render: (c) => { const d = b.last.get(c.id); return d ? fmtDate(d) : "—"; } },
+          { label: lastLabel, render: (c) => fmtDate(statsOf(stats, c.id).last) },
         ]}
       />
       <Pager page={page} hasNext={hasNext} query={{ type, q, bal, group, idle, sort }} shown={contacts.length} noun={noun} />
