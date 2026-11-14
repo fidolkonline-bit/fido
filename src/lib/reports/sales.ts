@@ -2,6 +2,7 @@ import { db } from "../db";
 import type { PayLine } from "../payroll";
 import type { ReportDef, Row } from "./types";
 import { D, ZERO, sum, inPeriod, locIn, totalsOf, groupSum } from "./util";
+import { channelLabel } from "../sale-channels";
 
 const saleWhere = (ctx: Parameters<ReportDef["run"]>[0]) => ({ stage: "FINAL", soldAt: inPeriod(ctx), locationId: locIn(ctx) });
 
@@ -69,7 +70,7 @@ export const salesReports: ReportDef[] = [
   {
     id: "RP-02", slug: "profit-breakdown", title: "Profit breakdowns", group: "Profit & sales",
     basis: "Line value before invoice-level discounts (legacy basis, as the old reports); returns not deducted. Use Profit / Loss for net figures.",
-    params: [{ key: "by", label: "Group by", options: [["product", "Product"], ["category", "Category"], ["brand", "Brand"], ["location", "Location"], ["day", "Day"], ["customer", "Customer"], ["staff", "Staff"], ["invoice", "Invoice"]] }],
+    params: [{ key: "by", label: "Group by", options: [["product", "Product"], ["category", "Category"], ["brand", "Brand"], ["location", "Location"], ["day", "Day"], ["customer", "Customer"], ["staff", "Staff"], ["channel", "Sale type"], ["invoice", "Invoice"]] }],
     async run(ctx) {
       const by = ctx.params.by ?? "product";
       const lines = await db.saleLine.findMany({
@@ -79,7 +80,7 @@ export const salesReports: ReportDef[] = [
       const keyOf = (l: (typeof lines)[number]) =>
         by === "category" ? l.product.category?.name ?? "No category" : by === "brand" ? l.product.brand?.name ?? "No brand"
         : by === "location" ? l.sale.location.name : by === "day" ? new Date(l.sale.soldAt.getTime() + 330 * 60_000).toISOString().slice(0, 10)
-        : by === "customer" ? l.sale.customer?.name ?? "Walk-in" : by === "staff" ? l.sale.createdBy.fullName : by === "invoice" ? l.sale.number : `${l.product.sku} · ${l.nameSnapshot}`;
+        : by === "customer" ? l.sale.customer?.name ?? "Walk-in" : by === "staff" ? l.sale.createdBy.fullName : by === "channel" ? channelLabel(l.sale.channel) : by === "invoice" ? l.sale.number : `${l.product.sku} · ${l.nameSnapshot}`;
       const g = groupSum(lines, keyOf, { qty: (l) => l.qty, sales: (l) => l.lineTotal, cost: (l) => l.costTotal });
       const rows: Row[] = [...g.entries()].map(([k, v]) => ({ group: k, qty: v.qty, sales: v.sales, cost: v.cost, profit: v.sales.minus(v.cost), margin: v.sales.gt(0) ? v.sales.minus(v.cost).div(v.sales).mul(100) : ZERO }))
         .sort((a, b) => (by === "day" ? String(a.group).localeCompare(String(b.group)) : D(b.sales as never).cmp(D(a.sales as never))));
@@ -204,6 +205,21 @@ export const salesReports: ReportDef[] = [
       const g = groupSum(sales, (s) => s.customer?.group?.name ?? (s.customer ? "No group" : "Walk-in"), { sales: (s) => s.total, returns: (s) => s.credited });
       const rows: Row[] = [...g.entries()].map(([k, v]) => ({ group: k, invoices: v._n, sales: v.sales, returns: v.returns, net: v.sales.minus(v.returns) }));
       return { columns: [{ key: "group", label: "Group" }, { key: "invoices", label: "Invoices", kind: "qty" }, { key: "sales", label: "Sales", kind: "money" }, { key: "returns", label: "Returns", kind: "money" }, { key: "net", label: "Net", kind: "money" }], rows, totals: totalsOf(rows, ["invoices", "sales", "returns", "net"]) };
+    },
+  },
+  {
+    id: "RP-38", slug: "sales-by-type", title: "Sales by type (In store / Fintrex / COD)", group: "Profit & sales",
+    basis: "Invoices by the sale type chosen at the POS, invoice date in Asia/Colombo. Due = total − paid − returned, as of now.",
+    async run(ctx) {
+      const sales = await db.sale.findMany({ where: saleWhere(ctx), select: { channel: true, total: true, paid: true, credited: true, lines: { select: { costTotal: true } } } });
+      const g = groupSum(sales, (s) => s.channel, { sales: (s) => s.total, paid: (s) => s.paid, returns: (s) => s.credited, cost: (s) => sum(s.lines, (l) => l.costTotal) });
+      const order = ["IN_STORE", "FINTREX", "COD"];
+      const rows: Row[] = [...g.entries()].sort(([a], [b]) => (order.indexOf(a) + 1 || 99) - (order.indexOf(b) + 1 || 99))
+        .map(([k, v]) => ({ type: channelLabel(k), invoices: v._n, sales: v.sales, returns: v.returns, paid: v.paid, due: v.sales.minus(v.paid).minus(v.returns), cost: v.cost, profit: v.sales.minus(v.cost) }));
+      return {
+        columns: [{ key: "type", label: "Sale type" }, { key: "invoices", label: "Invoices", kind: "qty" }, { key: "sales", label: "Sales", kind: "money" }, { key: "returns", label: "Returns", kind: "money" }, { key: "paid", label: "Paid", kind: "money" }, { key: "due", label: "Due", kind: "money" }, { key: "cost", label: "Cost", kind: "money", cost: true }, { key: "profit", label: "Gross profit", kind: "money", cost: true }],
+        rows, totals: totalsOf(rows, ["invoices", "sales", "returns", "paid", "due", "cost", "profit"]),
+      };
     },
   },
   {

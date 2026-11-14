@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { db } from "../../src/lib/db";
-import { finalizeSale } from "../../src/lib/sales";
+import { finalizeSale, setSaleChannel } from "../../src/lib/sales";
 import { createTradeIn } from "../../src/lib/tradeins";
 import { openCount, postCount, saveCounted, scanInto } from "../../src/lib/stockcount";
 import { createPlan, planProgress } from "../../src/lib/instalments";
@@ -43,6 +43,28 @@ async function main() {
     await fails(() => sale(cashier, { lines: [line], invoiceDiscount: 135, payments: [{ method: "CASH", amount: 1215 }] }), /whole sale/);
     const ok = await sale(cashier, { lines: [line], invoiceDiscount: 0, payments: [{ method: "CASH", amount: 1350 }] });
     assert.ok(ok.number);
+  });
+
+  await step("sale type (Fintrex / COD) is saved, needs a customer, and can be corrected with a log entry", async () => {
+    const line = async () => ({ productId: cover.id, qty: 1, unitPrice: 2000, lots: [{ layerId: await lotOf(cover.id), qty: 1 }] });
+    await fails(async () => sale(owner, { channel: "FINTREX", lines: [await line()], payments: [{ method: "CASH", amount: 2000 }] }), /customer for a Fintrex sale/);
+    await fails(async () => sale(owner, { channel: "NOPE", customerId: customer.id, lines: [await line()], payments: [{ method: "CASH", amount: 2000 }] }), /Invalid/);
+    const plain = await sale(owner, { lines: [await line()], payments: [{ method: "CASH", amount: 2000 }] });
+    assert.equal((await db.sale.findUniqueOrThrow({ where: { id: plain.id } })).channel, "IN_STORE");     // default
+    const f = await sale(owner, { channel: "FINTREX", channelRef: " FX-1001 ", customerId: customer.id, lines: [await line()], payments: [{ method: "CASH", amount: 500 }, { method: "OTHER", amount: 1500, reference: "Fintrex" }] });
+    const fs = await db.sale.findUniqueOrThrow({ where: { id: f.id } });
+    assert.equal(fs.channel, "FINTREX"); assert.equal(fs.channelRef, "FX-1001"); assert.equal(fs.paymentState, "PAID");
+    const c = await sale(owner, { channel: "COD", customerId: customer.id, lines: [await line()] });
+    assert.equal((await db.sale.findUniqueOrThrow({ where: { id: c.id } })).channel, "COD");
+    // A wrongly tagged sale is corrected; the ref is dropped for in-store; walk-in sales cannot be Fintrex/COD.
+    await setSaleChannel(owner, f.id, { channel: "COD", channelRef: "WB-77" });
+    assert.equal((await db.sale.findUniqueOrThrow({ where: { id: f.id } })).channelRef, "WB-77");
+    await setSaleChannel(owner, f.id, { channel: "IN_STORE", channelRef: "ignored" });
+    assert.equal((await db.sale.findUniqueOrThrow({ where: { id: f.id } })).channelRef, null);
+    assert.equal(await db.auditEvent.count({ where: { action: "SALE_TYPE_CHANGED", subjectId: f.id } }), 2);
+    await fails(() => setSaleChannel(owner, plain.id, { channel: "COD", channelRef: null }), /needs a customer/);
+    const n = await db.sale.count({ where: { channel: "FINTREX", id: { in: [plain.id, f.id, c.id] } } });
+    assert.equal(n, 0);
   });
 
   await step("tax (inclusive), warranty snapshot and loyalty points on a sale", async () => {

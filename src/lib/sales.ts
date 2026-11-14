@@ -15,6 +15,7 @@ import { debtOf } from "./debt";
 import { checkDiscountLimits } from "./discount-limits";
 import { getLoyalty, pointsFor } from "./loyalty";
 import { requireDrawer } from "./register";
+import { SALE_CHANNELS } from "./sale-channels";
 
 export const saleInput = z.object({
   idempotencyKey: z.string().min(8).max(80),
@@ -50,6 +51,8 @@ export const saleInput = z.object({
     )
     .default([]),
   notes: z.string().max(500).nullable().default(null),
+  channel: z.enum(SALE_CHANNELS).default("IN_STORE"),
+  channelRef: z.string().trim().max(80).nullable().default(null),
 });
 
 export type SaleInput = z.infer<typeof saleInput>;
@@ -65,6 +68,8 @@ export async function finalizeSale(user: CurrentUser, raw: unknown) {
     // Retried submit returns the same result (AC-11).
     const existing = await tx.sale.findUnique({ where: { idempotencyKey: input.idempotencyKey }, select: { id: true, number: true } });
     if (existing) return existing;
+
+    if (input.channel !== "IN_STORE" && !input.customerId) throw new SaleError(`Select the customer for a ${input.channel === "FINTREX" ? "Fintrex" : "COD"} sale.`);
 
     const register = { id: await requireDrawer(tx, location.id, "Open the cash register before selling.") };
 
@@ -173,6 +178,8 @@ export async function finalizeSale(user: CurrentUser, raw: unknown) {
         createdById: user.personId,
         registerId: register.id,
         notes: input.notes,
+        channel: input.channel,
+        channelRef: input.channel === "IN_STORE" ? null : input.channelRef || null,
         idempotencyKey: input.idempotencyKey,
         priceGroupId: policy.tier?.id ?? null,
         priceGroupName: policy.tier?.name ?? null,
@@ -300,5 +307,20 @@ export async function finalizeSale(user: CurrentUser, raw: unknown) {
     });
 
     return { id: sale.id, number, change: change.toFixed(2) };
+  });
+}
+
+// Fix a sale's type after the fact (cashier picked the wrong one). Payments are untouched; the change is logged.
+export async function setSaleChannel(user: CurrentUser, saleId: string, raw: { channel: unknown; channelRef: unknown }) {
+  const { channel, channelRef } = z.object({ channel: z.enum(SALE_CHANNELS), channelRef: z.string().trim().max(80).nullable() }).parse(raw);
+  return posting(async (tx) => {
+    const sale = await tx.sale.findUnique({ where: { id: saleId }, select: { stage: true, customerId: true, channel: true, channelRef: true, locationId: true } });
+    if (!sale || sale.stage !== "FINAL") throw new SaleError("Sale not found.");
+    if (!user.locations.some((l) => l.id === sale.locationId)) throw new SaleError("This sale belongs to another location.");
+    if (channel !== "IN_STORE" && !sale.customerId) throw new SaleError("A Fintrex or COD sale needs a customer on it.");
+    const ref = channel === "IN_STORE" ? null : channelRef || null;
+    if (sale.channel === channel && sale.channelRef === ref) return;
+    await tx.sale.update({ where: { id: saleId }, data: { channel, channelRef: ref } });
+    await tx.auditEvent.create({ data: { actorId: user.personId, action: "SALE_TYPE_CHANGED", subjectType: "Sale", subjectId: saleId, detail: { from: sale.channel, fromRef: sale.channelRef, to: channel, toRef: ref } } });
   });
 }

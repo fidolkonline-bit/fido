@@ -10,7 +10,8 @@ import { Barcode } from "@/components/Barcode";
 import { PayForm } from "@/components/PayForm";
 import { ActionForm } from "@/components/ActionForm";
 import { SubmitButton } from "@/components/SubmitButton";
-import { salePaymentForm, newShipmentForm } from "../../payment-actions";
+import { salePaymentForm, newShipmentForm, saleChannelForm } from "../../payment-actions";
+import { SALE_CHANNELS, CHANNEL_LABEL, channelLabel } from "@/lib/sale-channels";
 import { getInvoiceLayout, receiptPaper } from "@/lib/settings";
 import { debtOf } from "@/lib/debt";
 
@@ -52,7 +53,7 @@ export default async function SaleDetail({ params, searchParams }: { params: Pro
         <PageHead
           eyebrow={`Sell / ${sale.location.name}`}
           title={sale.number}
-          actions={<>{can(user, "returns.create") && sale.lines.some((l) => D(l.returnedQty).lt(l.qty)) && <Link className="btn" href={`/returns/new?sale=${sale.id}`}>Return / exchange</Link>}<Badge tone={sale.paymentState === "PAID" ? "ok" : "warn"}>{sale.paymentState === "PAID" ? "Paid" : sale.paymentState === "PARTIAL" ? "Part paid" : "Due"}</Badge><span className="row" style={{ gap: 4 }}>
+          actions={<>{can(user, "returns.create") && sale.lines.some((l) => D(l.returnedQty).lt(l.qty)) && <Link className="btn" href={`/returns/new?sale=${sale.id}`}>Return / exchange</Link>}{sale.channel !== "IN_STORE" && <Badge tone="muted">{channelLabel(sale.channel)}</Badge>}<Badge tone={sale.paymentState === "PAID" ? "ok" : "warn"}>{sale.paymentState === "PAID" ? "Paid" : sale.paymentState === "PARTIAL" ? "Part paid" : "Due"}</Badge><span className="row" style={{ gap: 4 }}>
             {(["80mm", "58mm", "A4"] as const).map((p) => <Link key={p} className={"btn btn-sm" + (p === paper ? " btn-primary" : "")} href={`?paper=${p}`} replace>{p}</Link>)}
           </span><WhatsAppLink phone={sale.customer?.phone} text={`${sale.location.business.name}: thank you for your purchase. Invoice ${sale.number}, total Rs. ${money(sale.total)}${due.gt(0) ? `, balance due Rs. ${money(due)}` : ""}.${sale.lines.filter((l) => l.warrantyUntil).map((l) => ` ${l.nameSnapshot}: warranty until ${fmtDate(l.warrantyUntil)}.`).join("")}`} />{can(user, "instalments.manage") && due.gt(0) && sale.customerId && !sale.instalmentPlan && <Link className="btn" href={`/sales/instalments/new?sale=${sale.id}`}>Instalment plan</Link>}{sale.instalmentPlan && <Link className="btn" href={`/sales/instalments/${sale.instalmentPlan.id}`}>Plan {sale.instalmentPlan.number}</Link>}<PrintOnLoad enabled={print === "1"} /></>}
         />
@@ -68,6 +69,7 @@ export default async function SaleDetail({ params, searchParams }: { params: Pro
         <div className="small" style={{ marginBottom: 10 }}>
           Customer: {sale.customer ? `${sale.customer.name}${sale.customer.phone ? ` · ${sale.customer.phone}` : ""}` : "Walk-in"}<br />
           Served by: {sale.createdBy.fullName}
+          {sale.channel !== "IN_STORE" && <><br />Sale type: {channelLabel(sale.channel)}{sale.channelRef ? ` · Ref ${sale.channelRef}` : ""}</>}
         </div>
         {sale.lines.map((l) => (
           <div key={l.id} className="totalrow" style={{ fontSize: 13 }}>
@@ -114,7 +116,7 @@ export default async function SaleDetail({ params, searchParams }: { params: Pro
             <h2 style={{ margin: 0 }}>Delivery</h2>
             {sale.shipments.map((sh) => <div key={sh.id} className="totalrow small"><span>{sh.address}{sh.carrier ? ` · ${sh.carrier}` : ""}{sh.trackingRef ? ` ${sh.trackingRef}` : ""}{D(sh.codAmount).gt(0) ? ` · COD ${money(sh.codRemitted)}/${money(sh.codAmount)}` : ""}</span><Badge tone={sh.status === "DELIVERED" ? "ok" : "warn"}>{sh.status.toLowerCase()}</Badge></div>)}
             {can(user, "sales.create") && (
-              <details><summary className="small" style={{ cursor: "pointer" }}>Ship this sale</summary>
+              <details open={sale.channel === "COD" && sale.shipments.length === 0}><summary className="small" style={{ cursor: "pointer" }}>Ship this sale</summary>
                 <ActionForm action={newShipmentForm} style={{ marginTop: 10 }}>
                   <input type="hidden" name="saleId" value={sale.id} />
                   <div className="grid3">
@@ -128,6 +130,18 @@ export default async function SaleDetail({ params, searchParams }: { params: Pro
                 </ActionForm>
               </details>
             )}
+          </section>
+        )}
+        {can(user, "sales.create") && (
+          <section className="panel">
+            <details><summary className="small" style={{ cursor: "pointer" }}>Sale type: <strong>{channelLabel(sale.channel)}</strong>{sale.channelRef ? ` · Ref ${sale.channelRef}` : ""} — change</summary>
+              <ActionForm action={saleChannelForm} className="row" style={{ marginTop: 10, gap: 6, flexWrap: "wrap" }}>
+                <input type="hidden" name="saleId" value={sale.id} />
+                <select name="channel" defaultValue={sale.channel} aria-label="Sale type">{SALE_CHANNELS.map((c) => <option key={c} value={c}>{CHANNEL_LABEL[c]}</option>)}</select>
+                <input name="channelRef" defaultValue={sale.channelRef ?? ""} maxLength={80} placeholder="Fintrex / order ref (optional)" aria-label="Reference" />
+                <SubmitButton className="btn btn-sm">Save</SubmitButton>
+              </ActionForm>
+            </details>
           </section>
         )}
         {(sale.pricingBasis || sale.lines.some((l) => l.priceRule)) && (

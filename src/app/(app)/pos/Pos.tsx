@@ -9,6 +9,7 @@ import { DevicePicker, deviceLabel } from "@/components/DevicePicker";
 import { completeSale, searchCustomers } from "./actions";
 import { quickAddCustomer } from "../contacts/actions";
 import { saveDraftAction } from "../sales/drafts/actions";
+import { SALE_CHANNELS, CHANNEL_LABEL, type SaleChannel } from "@/lib/sale-channels";
 import { DebtStrip, HistoryDialog, RepaymentDialog, useBalance, type DebtPerms, type RecvAccount } from "./DebtPanel";
 
 // lots: the salesperson's explicit lot choice (one row, or an explicit split); lotOptions: eligible lots here (null = loading).
@@ -66,6 +67,8 @@ export function Pos(props: Props) {
   const [error, setError] = useState<string | null>(null);
   const [picker, setPicker] = useState<ProductHit | null>(null);
   const [smsReceipt, setSmsReceipt] = useState(true);
+  const [channel, setChannel] = useState<SaleChannel>("IN_STORE");
+  const [channelRef, setChannelRef] = useState("");
   const [done, setDone] = useState<{ id: string; number: string; change: string } | null>(null);
   const [pending, start] = useTransition();
   // Previous debt of the selected customer: loaded live, shown apart from the sale, paid in its own dialog.
@@ -238,7 +241,7 @@ export function Pos(props: Props) {
   };
 
   const reset = () => {
-    setCart([]); setPicker(null); setCustomer(null); setOverride(undefined); setReprice(null); setCustEditing(false); setCustQ(""); setMode("NONE"); setAgentId(""); setInvDisc("");
+    setCart([]); setPicker(null); setCustomer(null); setOverride(undefined); setReprice(null); setCustEditing(false); setCustQ(""); setMode("NONE"); setAgentId(""); setInvDisc(""); setChannel("IN_STORE"); setChannelRef("");
     setPays([{ key: "p0", method: "CASH", amount: "", accountId: "", reference: "" }]);
     setError(null); setDone(null); setIdem(crypto.randomUUID()); setDraftId(null); setSaved(null);
   };
@@ -271,6 +274,8 @@ export function Pos(props: Props) {
         salespersonId: mode === "USER" || mode === "DUAL" ? salespersonId || null : null,
         agentId: mode === "AGENT" || mode === "DUAL" ? agentId || null : null,
         smsReceipt: smsReceipt && !!customer?.phone,
+        channel,
+        channelRef: channel === "IN_STORE" ? null : channelRef.trim() || null,
         payments: pays.filter((p) => n(p.amount) > 0).map((p) => ({ method: p.method, amount: p.amount, accountId: p.accountId || null, reference: p.reference || null })),
       });
       if (r.error) setError(r.error);
@@ -287,7 +292,7 @@ export function Pos(props: Props) {
         {customer && props.debtPerms.view && <div className="totalrow small"><span>{customer.name}&apos;s debt now</span><strong>{balance.status === "ok" ? `Rs. ${fmt(n(balance.ledger.debt))}` : balance.status === "loading" ? "Loading balance…" : "Balance unavailable"}</strong></div>}
         <div className="row" style={{ justifyContent: "center" }}>
           <Link className="btn" href={`/sales/${done.id}?print=1`}>Print receipt</Link>
-          <Link className="btn" href={`/sales/${done.id}`}>View sale</Link>
+          {channel === "COD" ? <Link className="btn" href={`/sales/${done.id}`}>Create shipment</Link> : <Link className="btn" href={`/sales/${done.id}`}>View sale</Link>}
           <button className="btn btn-primary" onClick={reset} autoFocus>New sale</button>
         </div>
       </div>
@@ -525,6 +530,18 @@ export function Pos(props: Props) {
         </div>
 
         <div>
+          <div className="row" style={{ marginBottom: 8, gap: 6 }} role="group" aria-label="Sale type">
+            <strong style={{ fontWeight: 600, fontSize: 13 }}>Sale type</strong><div className="spacer" />
+            {SALE_CHANNELS.map((c) => <button key={c} type="button" className={"btn btn-sm" + (c === channel ? " btn-primary" : "")} aria-pressed={c === channel} onClick={() => setChannel(c)}>{CHANNEL_LABEL[c]}</button>)}
+          </div>
+          {channel !== "IN_STORE" && (
+            <input value={channelRef} onChange={(e) => setChannelRef(e.target.value)} maxLength={80} style={{ width: "100%" }}
+              placeholder={channel === "FINTREX" ? "Fintrex agreement / ref no. (optional)" : "Online order / waybill no. (optional)"} aria-label={channel === "FINTREX" ? "Fintrex reference" : "COD order reference"} />
+          )}
+          {channel !== "IN_STORE" && !customer && cart.length > 0 && <p className="small" style={{ margin: "4px 0 0", color: "var(--warn)" }}>Select the customer for a {CHANNEL_LABEL[channel]} sale.</p>}
+        </div>
+
+        <div>
           <div className="row" style={{ marginBottom: 8 }}><strong style={{ fontWeight: 600, fontSize: 13 }}>Payment</strong><div className="spacer" />
             <button className="btn btn-sm" onClick={() => setPays((ps) => ps.map((p, i) => (i === 0 ? { ...p, amount: String(round2(total - ps.slice(1).reduce((a, x) => a + n(x.amount), 0))) } : p)))}>Exact amount</button>
           </div>
@@ -561,7 +578,7 @@ export function Pos(props: Props) {
           <button className="btn" onClick={reset} disabled={pending || cart.length === 0}>Clear</button>
           <button className="btn" disabled={pending || cart.length === 0 || cart.some((l) => l.product.tracked)} title="Park this sale and serve the next customer" onClick={() => saveAs("SUSPENDED")}>Suspend</button>
           <button className="btn" disabled={pending || cart.length === 0} onClick={() => saveAs("QUOTE")}>Quote</button>
-          <button className="btn btn-primary" style={{ flex: 1 }} onClick={submit} disabled={pending || cart.length === 0 || (due > 0 && !customer) || !!reprice || cart.some((l) => lotIssue(l))}>
+          <button className="btn btn-primary" style={{ flex: 1 }} onClick={submit} disabled={pending || cart.length === 0 || (due > 0 && !customer) || (channel !== "IN_STORE" && !customer) || !!reprice || cart.some((l) => lotIssue(l))}>
             {pending ? "Completing…" : due > 0 && customer ? `Complete · ${fmt(due)} on credit` : "Complete sale"}
           </button>
         </div>

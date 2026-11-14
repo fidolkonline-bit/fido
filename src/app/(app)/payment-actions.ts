@@ -6,6 +6,7 @@ import { requirePermission } from "@/lib/auth";
 import { receiveSalePayment, paySupplier, updateCheque } from "@/lib/payments";
 import { createShipment, setShipmentStatus, remitCod } from "@/lib/shipments";
 import { formError, num, str } from "@/lib/forms";
+import { setSaleChannel } from "@/lib/sales";
 
 type Res = { error?: string; ok?: string } | undefined;
 const payFrom = (f: FormData) => ({
@@ -100,4 +101,13 @@ export async function stopRecurring(f: FormData) {
   await requirePermission("expenses.manage");
   await db.recurringExpense.update({ where: { id: String(f.get("id")) }, data: { active: false } });
   revalidatePath("/expenses/recurring");
+}
+
+export async function saleChannelForm(_: Res, f: FormData): Promise<Res> {
+  const user = await requirePermission("sales.create");
+  const saleId = String(f.get("saleId"));
+  try { await setSaleChannel(user, saleId, { channel: f.get("channel"), channelRef: str(f, "channelRef") }); } catch (e) { return formError(e); }
+  revalidatePath(`/sales/${saleId}`);
+  revalidatePath("/sales");
+  return { ok: "Sale type saved." };
 }

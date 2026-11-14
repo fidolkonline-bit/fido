@@ -683,6 +683,10 @@ model Sale {
   registerId     String?
   register       RegisterSession? @relation(fields: [registerId], references: [id])
   notes          String?
+  // How the sale went out: IN_STORE (normal), FINTREX (Fintrex payment scheme), COD (online cash-on-delivery order).
+  channel        String           @default("IN_STORE")
+  // Fintrex agreement no. or COD order / waybill reference.
+  channelRef     String?
   idempotencyKey String?          @unique
   // Pricing snapshot: the tier in force and why (customer group, manual override by whom, or default).
   priceGroupId   String?
@@ -706,6 +710,7 @@ model Sale {
 
   @@index([soldAt])
   @@index([customerId])
+  @@index([channel, soldAt])
 }
 
 model SaleLine {
