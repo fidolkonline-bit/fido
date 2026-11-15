@@ -9,17 +9,33 @@ const PATTERNS = [
   "114311","411113","411311","113141","114131","311141","411131","211412","211214","211232","2331112",
 ];
 const START_B = 104;
+const START_C = 105;
+const CODE_B = 100; // switch to set B from set C
 const STOP = 106;
 
-export function code128(text: string) {
-  const chars = [...text].map((c) => {
-    const v = c.charCodeAt(0) - 32;
-    if (v < 0 || v > 94) throw new Error(`Character "${c}" cannot be printed in a barcode.`);
-    return v;
-  });
-  const checksum = chars.reduce((sum, v, i) => sum + v * (i + 1), START_B) % 103;
-  const codes = [START_B, ...chars, checksum, STOP];
-  let x = 10; // quiet zone
+const setB = (c: string) => {
+  const v = c.charCodeAt(0) - 32;
+  if (v < 0 || v > 94) throw new Error(`Character "${c}" cannot be printed in a barcode.`);
+  return v;
+};
+
+// Digit-only values of 4+ digits use set C (two digits per symbol, about half the width); an odd last digit
+// switches to set B. Everything else is set B. Both read the same on any Code 128 scanner.
+function symbols(text: string) {
+  if (/^\d{4,}$/.test(text)) {
+    const even = text.length - (text.length % 2);
+    const pairs = Array.from({ length: even / 2 }, (_, i) => Number(text.slice(i * 2, i * 2 + 2)));
+    return even === text.length ? [START_C, ...pairs] : [START_C, ...pairs, CODE_B, setB(text[even])];
+  }
+  return [START_B, ...[...text].map(setB)];
+}
+
+// `quiet` is the blank margin each side, in bar widths (10 is the Code 128 minimum).
+export function code128(text: string, quiet = 10) {
+  const data = symbols(text);
+  const checksum = data.reduce((sum, v, i) => sum + v * (i === 0 ? 1 : i), 0) % 103;
+  const codes = [...data, checksum, STOP];
+  let x = quiet;
   const bars: string[] = [];
   for (const code of codes) {
     const p = PATTERNS[code];
@@ -29,5 +45,5 @@ export function code128(text: string) {
       x += w;
     }
   }
-  return { path: bars.join(""), width: x + 10 };
+  return { path: bars.join(""), width: x + quiet };
 }

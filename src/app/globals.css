@@ -220,6 +220,31 @@ table.dt { width: 100%; border-collapse: collapse; font-size: 13px; }
 .label .l-name { font-size: 9pt; font-weight: 600; max-height: 2.4em; overflow: hidden; }
 .label .l-price { font-size: 11pt; font-weight: 700; }
 .label .l-meta { font-size: 7pt; }
+/* Stock labels: every row has a fixed height in mm (see products/labels/label-layout.ts) and the barcode takes what is left. */
+.label.stock { box-sizing: border-box; align-items: stretch; gap: 0.5mm; font-family: Arial, Helvetica, var(--font); }
+.label.stock > * { min-width: 0; }
+.label.stock .l-top { display: flex; gap: 1.5mm; font-size: 6.5pt; line-height: 2.7mm; height: 2.7mm; flex: none; }
+.label.stock .l-top span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.label.stock .l-name { max-height: none; display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.label.stock .l-barcode { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; align-items: center; }
+.label.stock .l-barcode svg { flex: 1 1 auto; min-height: 0; display: block; }
+.label.stock .l-small { font-size: 6.5pt; line-height: 2.7mm; height: 2.7mm; flex: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.label.stock .l-digits { letter-spacing: 0.3pt; font-variant-numeric: tabular-nums; }
+.label.stock .l-bottom { display: flex; justify-content: center; align-items: baseline; gap: 1.5mm; flex: none; white-space: nowrap; overflow: hidden; }
+.label.stock .l-price { font-size: 10pt; line-height: 4.2mm; }
+.label-setup { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: start; }
+.label-preview { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px; background: var(--wash); border-radius: var(--radius); }
+.label-preview .label { border: 1px solid var(--rule); box-shadow: 0 1px 3px rgba(0,0,0,0.12); }
+.label-row { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--rule); padding-top: 8px; }
+.label-row.is-preview { box-shadow: inset 3px 0 0 var(--accent); padding-left: 10px; }
+.label-row-name { flex: 1 1 200px; text-align: left; background: none; border: 0; padding: 0; color: inherit; font: inherit; cursor: pointer; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font: inherit; font-size: 13px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--rule); background: transparent; color: var(--muted); cursor: pointer; text-decoration: line-through; }
+.chip[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--surface); text-decoration: none; }
+.chip:disabled { opacity: 0.45; cursor: default; }
+.chip-changed { outline: 2px solid var(--accent); outline-offset: 1px; }
+.chips-sm .chip { font-size: 12px; padding: 2px 8px; }
+@media (max-width: 720px) { .label-setup { grid-template-columns: minmax(0, 1fr); } }
 
 /* Staff alerts */
 /* Installed app (PWA) */

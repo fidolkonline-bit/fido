@@ -15,7 +15,7 @@ export default async function Labels() {
       <div className="label-controls">
         <PageHead eyebrow="Products" title="Print stock labels" actions={can(user, "settings.manage") && <Link className="btn" href="/settings/labels">Label sizes</Link>} />
       </div>
-      <LabelPrinter templates={templates} business={business.name} />
+      <LabelPrinter templates={templates} business={business.name} canManage={can(user, "settings.manage")} />
     </div>
   );
 }

@@ -3,8 +3,11 @@
 import { useActionState } from "react";
 import { saveLabelTemplate } from "../printing-actions";
 import { SubmitButton } from "@/components/SubmitButton";
+import { LABEL_FIELDS, type LabelFlag } from "@/lib/label-fields";
 
-type T = { id: string; name: string; widthMm: number; heightMm: number; columns: number; gapMm: number; showName: boolean; showPrice: boolean; showLot: boolean; showBusiness: boolean };
+type T = { id: string; name: string; widthMm: number; heightMm: number; columns: number; gapMm: number; dpi: number } & Record<LabelFlag, boolean>;
+
+const NEW_DEFAULTS: Record<LabelFlag, boolean> = { showBusiness: false, showName: true, showSku: false, showBarcode: true, showBarcodeText: true, showPrice: true, showLot: false };
 
 export function LabelTemplateForm({ t }: { t?: T }) {
   const [state, action] = useActionState(saveLabelTemplate, undefined);
@@ -18,12 +21,15 @@ export function LabelTemplateForm({ t }: { t?: T }) {
         <label className="field" style={{ width: 90 }}><span>Height mm</span><input name="heightMm" type="number" step="0.5" defaultValue={t?.heightMm ?? 25} /></label>
         <label className="field" style={{ width: 90 }}><span>Columns</span><input name="columns" type="number" min={1} max={6} defaultValue={t?.columns ?? 1} /></label>
         <label className="field" style={{ width: 90 }}><span>Gap mm</span><input name="gapMm" type="number" step="0.5" defaultValue={t?.gapMm ?? 2} /></label>
+        <label className="field" style={{ width: 110 }}><span>Printer dpi</span>
+          <select name="dpi" defaultValue={t?.dpi ?? 203}><option value={203}>203 dpi</option><option value={300}>300 dpi</option></select>
+        </label>
       </div>
+      <div className="small muted">Prints by default (staff can still change it for each print job):</div>
       <div className="row" style={{ gap: 14 }}>
-        <label className="check"><input type="checkbox" name="showName" defaultChecked={t?.showName ?? true} /> Name</label>
-        <label className="check"><input type="checkbox" name="showPrice" defaultChecked={t?.showPrice ?? true} /> Price</label>
-        <label className="check"><input type="checkbox" name="showLot" defaultChecked={t?.showLot ?? false} /> Lot</label>
-        <label className="check"><input type="checkbox" name="showBusiness" defaultChecked={t?.showBusiness ?? false} /> Shop name</label>
+        {LABEL_FIELDS.map((f) => (
+          <label key={f.flag} className="check"><input type="checkbox" name={f.flag} defaultChecked={t?.[f.flag] ?? NEW_DEFAULTS[f.flag]} /> {f.label}</label>
+        ))}
         <div className="spacer" />
         <SubmitButton className="btn">Save</SubmitButton>
       </div>

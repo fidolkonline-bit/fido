@@ -35,13 +35,18 @@ export const labelTemplateSchema = z.object({
   showPrice: z.boolean().default(true),
   showLot: z.boolean().default(false),
   showBusiness: z.boolean().default(false),
+  showSku: z.boolean().default(false),
+  showBarcode: z.boolean().default(true),
+  showBarcodeText: z.boolean().default(true),
+  // Thermal label printers are 203 dpi (8 dots/mm) or 300 dpi; barcode bars are sized to whole printer dots.
+  dpi: z.union([z.literal(203), z.literal(300)]).default(203),
 });
 export type LabelTemplate = z.infer<typeof labelTemplateSchema>;
 
 const DEFAULT_LABELS: LabelTemplate[] = [
-  { id: "roll-50x25", name: "Roll 50 × 25 mm", widthMm: 50, heightMm: 25, columns: 1, gapMm: 2, showName: true, showPrice: true, showLot: false, showBusiness: false },
-  { id: "roll-38x25", name: "Roll 38 × 25 mm", widthMm: 38, heightMm: 25, columns: 1, gapMm: 2, showName: true, showPrice: true, showLot: false, showBusiness: false },
-  { id: "a4-3x8", name: "A4 sheet 3 × 8 (64 × 34 mm)", widthMm: 64, heightMm: 34, columns: 3, gapMm: 2, showName: true, showPrice: true, showLot: true, showBusiness: true },
+  { id: "roll-50x25", name: "Roll 50 × 25 mm", widthMm: 50, heightMm: 25, columns: 1, gapMm: 2, showName: true, showPrice: true, showLot: false, showBusiness: false, showSku: false, showBarcode: true, showBarcodeText: true, dpi: 203 },
+  { id: "roll-38x25", name: "Roll 38 × 25 mm", widthMm: 38, heightMm: 25, columns: 1, gapMm: 2, showName: true, showPrice: true, showLot: false, showBusiness: false, showSku: false, showBarcode: true, showBarcodeText: true, dpi: 203 },
+  { id: "a4-3x8", name: "A4 sheet 3 × 8 (64 × 34 mm)", widthMm: 64, heightMm: 34, columns: 3, gapMm: 2, showName: true, showPrice: true, showLot: true, showBusiness: true, showSku: false, showBarcode: true, showBarcodeText: true, dpi: 203 },
 ];
 
 async function read<T>(key: string, parse: (v: unknown) => T, fallback: T): Promise<T> {

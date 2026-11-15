@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { requirePermission } from "@/lib/auth";
 import { invoiceLayoutSchema, labelTemplateSchema, printerSchema, getPrinters, getLabelTemplates, saveSetting } from "@/lib/settings";
 import { formError, num, str, type FormState } from "@/lib/forms";
+import { LABEL_FIELDS, flagsOf, type LabelFields } from "@/lib/label-fields";
 
 const DOC_TYPES = ["SALE", "CREDIT_NOTE", "GRN", "PURCHASE_ORDER", "SUPPLIER_CLAIM", "PAYMENT_IN", "PAYMENT_OUT", "ADJUSTMENT", "TRANSFER", "EXPENSE"];
 
@@ -77,7 +78,8 @@ export async function saveLabelTemplate(_: FormState, f: FormData): Promise<Form
     const t = labelTemplateSchema.parse({
       id: str(f, "id") ?? crypto.randomUUID(), name: str(f, "name") ?? "", widthMm: num(f, "widthMm"), heightMm: num(f, "heightMm"),
       columns: num(f, "columns") ?? 1, gapMm: num(f, "gapMm") ?? 2,
-      showName: f.get("showName") === "on", showPrice: f.get("showPrice") === "on", showLot: f.get("showLot") === "on", showBusiness: f.get("showBusiness") === "on",
+      ...Object.fromEntries(LABEL_FIELDS.map((x) => [x.flag, f.get(x.flag) === "on"])),
+      dpi: num(f, "dpi") ?? 203,
     });
     const all = await getLabelTemplates();
     await saveSetting("labelTemplates", all.some((x) => x.id === t.id) ? all.map((x) => (x.id === t.id ? t : x)) : [...all, t], user.personId);
@@ -86,6 +88,20 @@ export async function saveLabelTemplate(_: FormState, f: FormData): Promise<Form
   }
   revalidatePath("/settings/labels");
   return { ok: "Label size saved." };
+}
+
+// "Save as default" from the print page: keeps the size, changes only what prints on it.
+export async function saveLabelFields(id: string, fields: LabelFields): Promise<FormState> {
+  const user = await requirePermission("settings.manage");
+  const all = await getLabelTemplates();
+  const t = all.find((x) => x.id === id);
+  if (!t) return { error: "That label size no longer exists." };
+  const flags = flagsOf(fields);
+  if (Object.values(flags).some((v) => typeof v !== "boolean")) return { error: "Invalid field choice." };
+  await saveSetting("labelTemplates", all.map((x) => (x.id === id ? labelTemplateSchema.parse({ ...x, ...flags }) : x)), user.personId);
+  revalidatePath("/settings/labels");
+  revalidatePath("/products/labels");
+  return { ok: `Saved as the default for ${t.name}.` };
 }
 
 export async function listSchemes() {

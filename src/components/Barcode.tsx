@@ -6,7 +6,7 @@ export function Barcode({ value, height = 40, showText = true, className }: { va
   try { bc = code128(value); } catch { return <span className="small">{value}</span>; }
   return (
     <span className={className} style={{ display: "inline-flex", flexDirection: "column", alignItems: "center", maxWidth: "100%" }}>
-      <svg viewBox={`0 0 ${bc.width} 1`} preserveAspectRatio="none" style={{ width: "100%", maxWidth: bc.width * 2, height, display: "block" }} role="img" aria-label={`Barcode ${value}`}>
+      <svg viewBox={`0 0 ${bc.width} 1`} preserveAspectRatio="none" style={{ width: "100%", maxWidth: bc.width * 2, height, display: "block" }} shapeRendering="crispEdges" role="img" aria-label={`Barcode ${value}`}>
         <rect width={bc.width} height="1" fill="#fff" />
         <path d={bc.path} fill="#000" />
       </svg>
