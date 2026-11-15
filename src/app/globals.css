@@ -244,6 +244,25 @@ table.dt { width: 100%; border-collapse: collapse; font-size: 13px; }
 .chip:disabled { opacity: 0.45; cursor: default; }
 .chip-changed { outline: 2px solid var(--accent); outline-offset: 1px; }
 .chips-sm .chip { font-size: 12px; padding: 2px 8px; }
+
+/* Repair intake: tap-to-pick buttons, folded sections, bottom action bar */
+.picks { display: flex; flex-wrap: wrap; gap: 8px; }
+.pick { min-height: 38px; padding: 6px 14px; border-radius: 999px; font-size: 14px; }
+.pick[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--surface); }
+.pick[aria-pressed="true"]::before { content: "✓"; font-size: 12px; }
+.pick-label { font-size: 12px; font-weight: 500; color: var(--muted); margin: 0 0 6px; }
+.fold > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px; min-height: 28px; }
+.fold > summary::-webkit-details-marker { display: none; }
+.fold > summary::after { content: "+"; margin-left: auto; font-size: 18px; color: var(--muted); }
+.fold[open] > summary::after { content: "–"; }
+.fold > summary h2 { margin: 0; white-space: nowrap; }
+.fold[open] > summary { margin-bottom: 14px; }
+.intake-bar {
+  position: sticky; bottom: 0; z-index: 20; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 12px 16px; background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius);
+  box-shadow: 0 -4px 12px rgba(0,0,0,0.08);
+}
+.intake-bar .btn-primary { min-width: 150px; }
 @media (max-width: 720px) { .label-setup { grid-template-columns: minmax(0, 1fr); } }
 
 /* Staff alerts */
@@ -328,6 +347,8 @@ table.dt { width: 100%; border-collapse: collapse; font-size: 13px; }
   }
   .checkout-bar strong { font-size: 18px; font-variant-numeric: tabular-nums; }
   .main:has(.checkout-bar) { padding-bottom: calc(var(--bottombar-h) + 96px); }
+  .intake-bar { bottom: calc(var(--bottombar-h) + env(safe-area-inset-bottom)); margin: 0 -16px; border-radius: 0; border-width: 1px 0 0; }
+  .intake-bar .btn-primary { flex: 1; }
   .payrow { grid-template-columns: 110px minmax(0, 1fr) 44px; }
 }
 
