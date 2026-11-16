@@ -117,6 +117,7 @@ model Person {
   repairsCreated        RepairJob[]            @relation("RepairCreator")
   repairsAssigned       RepairJob[]            @relation("RepairTechnician")
   repairEvents          RepairEvent[]
+  repairOutsources      RepairOutsource[]
   reloadsRequested      ReloadRequest[]        @relation("ReloadRequester")
   reloadsAssigned       ReloadRequest[]        @relation("ReloadAssignee")
   walletMovements       WalletMovement[]
@@ -323,8 +324,9 @@ model Contact {
   purchaseOrders PurchaseOrder[]
   claims         SupplierClaim[]
 
-  repairs RepairJob[]
-  reloads ReloadRequest[]
+  repairs          RepairJob[]
+  repairOutsources RepairOutsource[]
+  reloads          ReloadRequest[]
 
   drafts        SaleDraft[]
   subscriptions Subscription[]
@@ -963,7 +965,7 @@ model RepairJob {
   accessories        String?
   condition          String?
   problem            String
-  status             String        @default("RECEIVED") // RECEIVED, DIAGNOSIS, AWAITING_APPROVAL, AWAITING_PARTS, IN_PROGRESS, TESTING, READY, COLLECTED, CANCELLED
+  status             String        @default("RECEIVED") // RECEIVED, DIAGNOSIS, AWAITING_APPROVAL, AWAITING_PARTS, IN_PROGRESS, OUTSOURCED, TESTING, READY, COLLECTED, CANCELLED
   technicianId       String?
   technician         Person?       @relation("RepairTechnician", fields: [technicianId], references: [id])
   diagnosis          String?
@@ -1005,6 +1007,13 @@ model RepairJob {
   trackToken       String?             @unique
   photos           RepairPhoto[]
   commissions      CommissionAccrual[]
+
+  // How the job is done: IN_HOUSE (our technician, our parts) or OUTSOURCED (sent to another shop). Null = not decided.
+  route         String?
+  outsources    RepairOutsource[]
+  // Result recorded when the job moves to Ready: REPAIRED or NOT_REPAIRED (with a reason).
+  outcome       String?
+  outcomeReason String?
 
   @@index([status])
   @@index([customerId])
@@ -1923,6 +1932,28 @@ model TradeIn {
 }
 
 // ───────────── Repair photos ─────────────
+
+// One trip to an outside repair shop. A job can go to more than one shop in turn; their costs add up to externalCost.
+model RepairOutsource {
+  id          String    @id @default(cuid())
+  jobId       String
+  job         RepairJob @relation(fields: [jobId], references: [id])
+  vendorId    String
+  vendor      Contact   @relation(fields: [vendorId], references: [id])
+  sentAt      DateTime  @default(now())
+  expectedAt  DateTime?
+  quote       Decimal?  @db.Decimal(14, 2) // what the outside shop said it would charge
+  returnedAt  DateTime?
+  cost        Decimal?  @db.Decimal(14, 2) // what they actually charged us
+  result      String? // REPAIRED, NOT_REPAIRED
+  note        String?
+  createdById String
+  createdBy   Person    @relation(fields: [createdById], references: [id])
+  createdAt   DateTime  @default(now())
+
+  @@index([jobId])
+  @@index([vendorId])
+}
 
 model RepairPhoto {
   id          String    @id @default(cuid())

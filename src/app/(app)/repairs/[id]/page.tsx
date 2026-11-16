@@ -3,10 +3,10 @@ import { notFound } from "next/navigation";
 import { requirePermission, can } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { D, money, qty, fmtDateTime, fmtDate } from "@/lib/money";
-import { REPAIR_STATUS, isOpen } from "@/lib/repairs";
+import { REPAIR_STATUS, isOpen, canSendOut, FAIL_REASONS, OUTCOMES } from "@/lib/repairs";
 import { PageHead, DataTable, Badge, RowLink } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
-import { StatusButtons, DiagnosisForm, ChargesForm, PaymentForm, IssuePart, CredentialReveal } from "../JobPanels";
+import { StatusButtons, DiagnosisForm, ChargesForm, PaymentForm, RefundForm, IssuePart, CredentialReveal, RoutePicker, SendOutsideForm, ReturnFromOutsideForm } from "../JobPanels";
 import { doApprove, doReturnPart, doPurge, removeRepairPhoto } from "../actions";
 import { headers } from "next/headers";
 import { PhotoUpload } from "../PhotoPanel";
@@ -22,6 +22,7 @@ const toLocalInput = (d: Date | null) => (d ? new Date(d.getTime() + 330 * 60_00
 const EVENT: Record<string, string> = {
   STATUS: "Status", NOTE: "Note", ESTIMATE: "Diagnosis / estimate", APPROVAL: "Customer approval", PART_ISSUED: "Part issued", PART_RETURNED: "Part returned",
   CREDENTIAL_VIEWED: "Unlock code viewed", CREDENTIAL_PURGED: "Unlock code deleted", PAYMENT: "Payment", CHARGES: "Bill updated",
+  REFUND: "Refund", ROUTE: "Route", OUTSOURCE_SENT: "Sent to outside shop", OUTSOURCE_BACK: "Back from outside shop",
 };
 
 export default async function RepairJob({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ new?: string }> }) {
@@ -34,6 +35,7 @@ export default async function RepairJob({ params, searchParams }: { params: Prom
       payments: { orderBy: { paidAt: "asc" } },
       events: { include: { actor: true }, orderBy: { createdAt: "desc" } },
       photos: { orderBy: { createdAt: "asc" } },
+      outsources: { include: { vendor: true }, orderBy: { sentAt: "asc" } },
       originSaleLine: { include: { sale: { select: { id: true, number: true } } } },
     },
   });
@@ -48,22 +50,29 @@ export default async function RepairJob({ params, searchParams }: { params: Prom
   const due = D(job.total).minus(job.paid);
   const partsValue = job.parts.reduce((a, p) => a.plus(D(p.qtyIssued).minus(p.qtyReturned).mul(p.unitPrice)), D(0));
   const partsCost = job.parts.reduce((a, p) => a.plus(p.costTotal), D(0));
-  const [technicians, accounts] = await Promise.all([
+  const openTrip = job.outsources.find((o) => !o.returnedAt) ?? null;
+  const partsOnJob = job.parts.filter((p) => D(p.qtyIssued).gt(p.qtyReturned)).length;
+  const failed = job.outcome === "NOT_REPAIRED";
+  // Money goes back only once the bill is final (Ready) or the job is cancelled; before that, paying ahead is normal.
+  const owedBack = job.status === "CANCELLED" ? D(job.paid) : job.status === "READY" ? due.neg() : D(0);
+  const [technicians, accounts, shops] = await Promise.all([
     db.person.findMany({ where: { active: true, login: { role: { permissions: { has: "repairs.manage" } } } }, orderBy: { fullName: "asc" }, select: { id: true, fullName: true } }),
     db.account.findMany({ where: { active: true, type: { in: ["CARD", "BANK"] } }, select: { id: true, name: true } }),
+    manage && open ? db.contact.findMany({ where: { active: true, isSupplier: true }, orderBy: { name: "asc" }, select: { id: true, name: true } }) : [],
   ]);
   const labels = Object.fromEntries(Object.entries(REPAIR_STATUS).map(([k, v]) => [k, v.label]));
   const st = REPAIR_STATUS[job.status];
+  const statusLabel = failed && (job.status === "READY" || job.status === "COLLECTED") ? `${st?.label} · not repaired` : st?.label ?? job.status;
 
   return (
     <div className="stack">
       <PageHead eyebrow={`Repair / ${job.location.name}`} title={job.number}
         actions={<>
-          <Badge tone={st?.tone ?? "muted"}>{st?.label ?? job.status}</Badge>
+          <Badge tone={failed && job.status === "READY" ? "err" : st?.tone ?? "muted"}>{statusLabel}</Badge>
           <Link className="btn" href={`/repairs/${job.id}/sticker`}>Job sticker</Link>
           <Link className="btn" href={`/repairs/${job.id}/sticker?bill=1`}>Print bill</Link>
           <WhatsAppLink phone={job.customer.phone} label="WhatsApp update"
-            text={`${job.customer.name}, your ${[job.deviceBrand, job.deviceModel].filter(Boolean).join(" ")} (job ${job.number}) is now: ${st?.label ?? job.status}.${job.status === "AWAITING_APPROVAL" && job.estimate ? ` Estimate Rs. ${money(job.estimate)} — please reply to approve.` : ""}${job.status === "READY" && due.gt(0) ? ` Balance to pay Rs. ${money(due)}.` : ""}${trackUrl ? ` Track it here: ${trackUrl}` : ""}`} />
+            text={`${job.customer.name}, your ${[job.deviceBrand, job.deviceModel].filter(Boolean).join(" ")} (job ${job.number}) is now: ${failed && job.status === "READY" ? "ready to collect — sorry, we could not repair it" : st?.label ?? job.status}.${job.status === "AWAITING_APPROVAL" && job.estimate ? ` Estimate Rs. ${money(job.estimate)} — please reply to approve.` : ""}${job.status === "READY" && due.gt(0) ? ` Balance to pay Rs. ${money(due)}.` : ""}${trackUrl ? ` Track it here: ${trackUrl}` : ""}`} />
         </>} />
       {isNew && <p className="note note-ok">Job created. Print the job sticker and stick it on the device, then add photos of the device below.</p>}
       {job.originSaleLine && (
@@ -80,6 +89,9 @@ export default async function RepairJob({ params, searchParams }: { params: Prom
         <div><span className="muted">Problem</span><br />{job.problem}</div>
         <div><span className="muted">Checklist</span><br />SIM × {job.simCount}{job.memoryCard ? " · memory card" : ""}{job.accessories ? ` · ${job.accessories}` : ""}{job.condition && <><br />{job.condition}</>}</div>
         <div><span className="muted">Technician</span><br />{job.technician?.fullName ?? "Not assigned"}</div>
+        <div><span className="muted">Estimate</span><br />{job.estimate != null ? `Rs. ${money(job.estimate)}` : "Not given yet"}{D(job.paid).gt(0) && <><br /><span className="muted">Paid so far</span> Rs. {money(job.paid)}</>}</div>
+        <div><span className="muted">Repair route</span><br />{job.route === "IN_HOUSE" ? "In-house" : job.route === "OUTSOURCED" ? `Outsourced${openTrip ? ` · now at ${openTrip.vendor.name}` : ""}` : "Not decided"}</div>
+        {job.outcome && <div><span className="muted">Result</span><br /><span style={{ color: failed ? "var(--err)" : "var(--ok)" }}>{OUTCOMES[job.outcome]}</span>{job.outcomeReason && ` — ${job.outcomeReason}`}</div>}
       </div>
 
       <section className="panel stack">
@@ -118,10 +130,36 @@ export default async function RepairJob({ params, searchParams }: { params: Prom
               <SubmitButton>Customer approved estimate</SubmitButton>
             </form>
           )}
-          <StatusButtons jobId={job.id} next={st?.next ?? []} labels={labels} />
+          {job.status === "OUTSOURCED" && <p className="small muted" style={{ margin: 0 }}>The device is at {openTrip?.vendor.name ?? "the outside shop"}. Record it back under “How it is repaired” to continue.</p>}
+          <StatusButtons jobId={job.id} next={st?.next ?? []} labels={labels} reasons={FAIL_REASONS} partsOnJob={partsOnJob} />
           {due.gt(0) && (st?.next ?? []).includes("COLLECTED") && <p className="small muted" style={{ margin: 0 }}>Rs. {money(due)} is due — take payment before handing over.</p>}
         </section>
       )}
+
+      {(manage && open && job.status !== "READY") || job.outsources.length > 0 ? (
+        <section className="panel stack">
+          <h2 style={{ margin: 0 }}>How it is repaired</h2>
+          {manage && open && job.status !== "READY" && <RoutePicker jobId={job.id} route={job.route} locked={job.status === "OUTSOURCED"} />}
+          {job.outsources.length > 0 && (
+            <DataTable rows={job.outsources} rowKey={(o) => o.id}
+              columns={[
+                { label: "Outside shop", primary: true, render: (o) => <>{o.vendor.name}{o.vendor.phone && <> · <a href={`tel:${o.vendor.phone}`}>{o.vendor.phone}</a></>}{o.note && <><br /><span className="small muted">{o.note}</span></>}</> },
+                { label: "Sent", render: (o) => fmtDateTime(o.sentAt) },
+                { label: "Expected", render: (o) => { const late = !o.returnedAt && o.expectedAt && o.expectedAt < new Date(); return <span style={{ color: late ? "var(--err)" : undefined }}>{o.expectedAt ? fmtDateTime(o.expectedAt) : "—"}{late ? " · late" : ""}</span>; } },
+                { label: "Quote", num: true, render: (o) => (o.quote != null ? money(o.quote) : "—") },
+                { label: "Back", render: (o) => (o.returnedAt ? fmtDateTime(o.returnedAt) : <Badge tone="warn">Still there</Badge>) },
+                { label: "Result", render: (o) => (o.result ? <Badge tone={o.result === "REPAIRED" ? "ok" : "err"}>{o.result === "REPAIRED" ? "Fixed" : "Not fixed"}</Badge> : "—") },
+                ...(can(user, "cost.view") ? [{ label: "Charged us", num: true, render: (o: (typeof job.outsources)[number]) => (o.cost != null ? money(o.cost) : "—") }] : []),
+              ]} />
+          )}
+          {manage && openTrip && <ReturnFromOutsideForm jobId={job.id} outsourceId={openTrip.id} shop={openTrip.vendor.name} quote={openTrip.quote?.toString() ?? ""} />}
+          {manage && job.route === "OUTSOURCED" && !openTrip && canSendOut(job.status) && (
+            job.outsources.length ? <details><summary className="small" style={{ cursor: "pointer" }}>Send to another outside shop</summary><div style={{ marginTop: 10 }}><SendOutsideForm jobId={job.id} shops={shops} /></div></details>
+              : <SendOutsideForm jobId={job.id} shops={shops} />
+          )}
+          {manage && open && job.route === "IN_HOUSE" && <p className="small muted" style={{ margin: 0 }}>Issue the spare parts used under Parts below; they come out of stock and go on the bill.</p>}
+        </section>
+      ) : null}
 
       <section className="panel stack">
         <h2 style={{ margin: 0 }}>Unlock code</h2>
@@ -165,7 +203,9 @@ export default async function RepairJob({ params, searchParams }: { params: Prom
               ) : null,
             },
           ]} />
-        {manage && open && <IssuePart jobId={job.id} />}
+        {manage && open && job.status !== "OUTSOURCED" && (job.route === "OUTSOURCED"
+          ? <details><summary className="small" style={{ cursor: "pointer" }}>Issue a part from our stock (e.g. sent along to the outside shop)</summary><div style={{ marginTop: 10 }}><IssuePart jobId={job.id} /></div></details>
+          : <IssuePart jobId={job.id} />)}
       </section>
 
       <section className="grid2">
@@ -177,17 +217,19 @@ export default async function RepairJob({ params, searchParams }: { params: Prom
           {D(job.discount).gt(0) && <div className="totalrow"><span>Discount</span><strong>−{money(job.discount)}</strong></div>}
           <div className="totalrow grand"><span>Total</span><strong>Rs. {money(job.total)}</strong></div>
           <div className="totalrow"><span>Paid (incl. advance)</span><strong>{money(job.paid)}</strong></div>
-          <div className="totalrow"><span>Due</span><strong style={{ color: due.gt(0) ? "var(--err)" : undefined }}>{money(due)}</strong></div>
+          {due.lt(0) ? <div className="totalrow"><span>{job.status === "READY" ? "Owed back to customer" : "Paid ahead of the bill"}</span><strong style={{ color: "var(--warn)" }}>{money(due.neg())}</strong></div>
+            : <div className="totalrow"><span>Due</span><strong style={{ color: due.gt(0) ? "var(--err)" : undefined }}>{money(due)}</strong></div>}
           {can(user, "cost.view") && <p className="small muted">Our cost: parts {money(partsCost)} + outside {money(job.externalCost)} · margin {money(D(job.total).minus(partsCost).minus(job.externalCost))}</p>}
           {manage && open && <details style={{ marginTop: 10 }}><summary className="small" style={{ cursor: "pointer" }}>Edit labour / charges / warranty</summary><div style={{ marginTop: 10 }}>
-            <ChargesForm jobId={job.id} labour={job.labourCharge.toString()} other={job.otherCharge.toString()} discount={job.discount.toString()} externalCost={job.externalCost.toString()} warrantyDays={job.warrantyDays?.toString() ?? ""} />
+            <ChargesForm jobId={job.id} labour={job.labourCharge.toString()} other={job.otherCharge.toString()} discount={job.discount.toString()} externalCost={job.externalCost.toString()} warrantyDays={job.warrantyDays?.toString() ?? ""} outsideFromTrips={job.outsources.length > 0} />
           </div></details>}
         </div>
         <div className="panel">
           <h2>Payments</h2>
           {job.payments.length === 0 ? <p className="muted small">No payments yet.</p> : job.payments.map((p) => (
-            <div key={p.id} className="totalrow small"><span>{fmtDateTime(p.paidAt)} · {p.method.toLowerCase().replace("_", " ")}</span><strong>{money(p.amount)}</strong></div>
+            <div key={p.id} className="totalrow small"><span>{fmtDateTime(p.paidAt)} · {p.method.toLowerCase().replace("_", " ")}{p.direction === "OUT" ? " · refund" : ""}</span><strong>{p.direction === "OUT" ? "−" : ""}{money(p.amount)}</strong></div>
           ))}
+          {manage && job.status !== "COLLECTED" && owedBack.gt(0) && <div style={{ marginTop: 12 }}><RefundForm jobId={job.id} owed={owedBack.toFixed(2)} accounts={accounts} /></div>}
           {manage && job.status !== "CANCELLED" && job.status !== "COLLECTED" && <div style={{ marginTop: 12 }}><PaymentForm jobId={job.id} due={due.toFixed(2)} accounts={accounts} /></div>}
         </div>
       </section>

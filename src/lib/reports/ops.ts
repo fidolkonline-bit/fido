@@ -1,3 +1,4 @@
+import type { Prisma } from "@prisma/client";
 import { db } from "../db";
 import { attendance, dateOnlyYmd } from "../hr";
 import { targetResult } from "../targets";
@@ -13,7 +14,7 @@ export const opsReports: ReportDef[] = [
     id: "RP-29", slug: "repairs", title: "Repairs", group: "Operations", perm: "repairs.view",
     basis: "Jobs received in the period: status, technician, age, promised vs ready, income, parts and outside cost, payments and balance.",
     async run(ctx) {
-      const jobs = await db.repairJob.findMany({ where: { createdAt: inPeriod(ctx), locationId: locIn(ctx) }, include: { customer: true, technician: true, parts: true }, orderBy: { createdAt: "asc" } });
+      const jobs = await db.repairJob.findMany({ where: { createdAt: inPeriod(ctx), locationId: locIn(ctx) }, include: { customer: true, technician: true, parts: true, outsources: { include: { vendor: { select: { name: true } } } } }, orderBy: { createdAt: "asc" } });
       const now = Date.now();
       const rows: Row[] = jobs.map((j) => {
         const parts = sum(j.parts, (p) => p.costTotal);
@@ -21,12 +22,46 @@ export const opsReports: ReportDef[] = [
         const late = j.promisedAt && ((j.readyAt ?? new Date(now)) > j.promisedAt);
         return {
           job: j.number, received: j.createdAt, device: [j.deviceBrand, j.deviceModel].filter(Boolean).join(" "), customer: j.customer.name, tech: j.technician?.fullName ?? "",
-          status: j.status.toLowerCase().replace("_", " "), age: open ? Math.floor((now - j.createdAt.getTime()) / 86_400_000) : null, onTime: j.promisedAt ? (late ? "late" : "on time") : "",
+          route: j.route === "IN_HOUSE" ? "in-house" : j.route === "OUTSOURCED" ? "outsourced" : "", shops: [...new Set(j.outsources.map((o) => o.vendor.name))].join(", "),
+          result: j.outcome === "REPAIRED" ? "repaired" : j.outcome === "NOT_REPAIRED" ? `not repaired${j.outcomeReason ? ` (${j.outcomeReason.toLowerCase()})` : ""}` : "",
+          status: j.status.toLowerCase().replaceAll("_", " "), age: open ? Math.floor((now - j.createdAt.getTime()) / 86_400_000) : null, onTime: j.promisedAt ? (late ? "late" : "on time") : "",
           total: j.total, partsCost: parts, outside: j.externalCost, margin: D(j.total).minus(parts).minus(j.externalCost), paid: j.paid, due: D(j.total).minus(j.paid),
           _href: `/repairs/${j.id}`, _tone: late && open ? "warn" : undefined,
         };
       });
-      return { columns: [{ key: "job", label: "Job" }, { key: "received", label: "Received", kind: "datetime" }, { key: "device", label: "Device" }, { key: "customer", label: "Customer" }, { key: "tech", label: "Technician" }, { key: "status", label: "Status" }, { key: "age", label: "Days open", kind: "qty" }, { key: "onTime", label: "Promise" }, { key: "total", label: "Bill", kind: "money" }, { key: "partsCost", label: "Parts cost", kind: "money", cost: true }, { key: "outside", label: "Outside cost", kind: "money", cost: true }, { key: "margin", label: "Margin", kind: "money", cost: true }, { key: "paid", label: "Paid", kind: "money" }, { key: "due", label: "Due", kind: "money" }], rows, totals: totalsOf(rows, ["total", "partsCost", "outside", "margin", "paid", "due"]) };
+      return { columns: [{ key: "job", label: "Job" }, { key: "received", label: "Received", kind: "datetime" }, { key: "device", label: "Device" }, { key: "customer", label: "Customer" }, { key: "tech", label: "Technician" }, { key: "route", label: "Route" }, { key: "shops", label: "Outside shop" }, { key: "status", label: "Status" }, { key: "result", label: "Result" }, { key: "age", label: "Days open", kind: "qty" }, { key: "onTime", label: "Promise" }, { key: "total", label: "Bill", kind: "money" }, { key: "partsCost", label: "Parts cost", kind: "money", cost: true }, { key: "outside", label: "Outside cost", kind: "money", cost: true }, { key: "margin", label: "Margin", kind: "money", cost: true }, { key: "paid", label: "Paid", kind: "money" }, { key: "due", label: "Due", kind: "money" }], rows, totals: totalsOf(rows, ["total", "partsCost", "outside", "margin", "paid", "due"]) };
+    },
+  },
+  {
+    id: "RP-29B", slug: "repair-outcomes", title: "Repair success rate", group: "Operations", perm: "repairs.view",
+    basis: "Jobs given a result (repaired or not) in the period, by technician for in-house work and by outside shop for each trip out, with what the outside shops charged.",
+    async run(ctx) {
+      const [jobs, trips] = await Promise.all([
+        db.repairJob.findMany({ where: { readyAt: inPeriod(ctx), outcome: { not: null }, locationId: locIn(ctx) }, include: { technician: { select: { fullName: true } } } }),
+        db.repairOutsource.findMany({ where: { returnedAt: inPeriod(ctx), job: { locationId: locIn(ctx) } }, include: { vendor: { select: { name: true } } } }),
+      ]);
+      type G = { kind: string; who: string; done: number; ok: number; cost: Prisma.Decimal; days: number };
+      const g = new Map<string, G>();
+      const add = (kind: string, who: string, ok: boolean, cost = D(0), days = 0) => {
+        const k = `${kind}|${who}`;
+        const x = g.get(k) ?? { kind, who, done: 0, ok: 0, cost: D(0), days: 0 };
+        x.done++; if (ok) x.ok++; x.cost = x.cost.plus(cost); x.days += days;
+        g.set(k, x);
+      };
+      for (const j of jobs) if (j.route !== "OUTSOURCED") add("In-house technician", j.technician?.fullName ?? "Not assigned", j.outcome === "REPAIRED");
+      for (const t of trips) add("Outside shop", t.vendor.name, t.result === "REPAIRED", D(t.cost ?? 0), t.returnedAt ? (t.returnedAt.getTime() - t.sentAt.getTime()) / 86_400_000 : 0);
+      const rows: Row[] = [...g.values()].sort((a, b) => a.kind.localeCompare(b.kind) || b.done - a.done).map((x) => ({
+        kind: x.kind, who: x.who, done: x.done, ok: x.ok, failed: x.done - x.ok, rate: x.done ? (x.ok / x.done) * 100 : null,
+        days: x.kind === "Outside shop" && x.done ? Math.round((x.days / x.done) * 10) / 10 : null, cost: x.kind === "Outside shop" ? x.cost : null,
+        _tone: x.done >= 3 && x.ok / x.done < 0.6 ? "warn" : undefined,
+      }));
+      const ok = jobs.filter((j) => j.outcome === "REPAIRED").length;
+      return {
+        columns: [{ key: "kind", label: "Done by" }, { key: "who", label: "Technician / shop" }, { key: "done", label: "Finished", kind: "qty" }, { key: "ok", label: "Repaired", kind: "qty" }, { key: "failed", label: "Not repaired", kind: "qty" }, { key: "rate", label: "Success", kind: "pct" }, { key: "days", label: "Avg days away", kind: "qty" }, { key: "cost", label: "Charged us", kind: "money", cost: true }],
+        rows, totals: totalsOf(rows, ["done", "ok", "failed", "cost"]),
+        summary: [{ label: "Jobs finished", value: jobs.length, kind: "qty" }, { label: "Repaired", value: jobs.length ? (ok / jobs.length) * 100 : null, kind: "pct" }, { label: "Sent to outside shops", value: trips.length, kind: "qty" }],
+        notes: ["A job sent to two outside shops counts once for each shop. Jobs finished before this feature have no result and are not counted."],
+      };
     },
   },
   {

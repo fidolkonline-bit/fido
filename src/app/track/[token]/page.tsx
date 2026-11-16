@@ -13,12 +13,13 @@ const TEXT: Record<string, { title: string; body: string }> = {
   AWAITING_APPROVAL: { title: "Waiting for your approval", body: "We have an estimate for you. Please call or message the shop to approve it." },
   AWAITING_PARTS: { title: "Waiting for parts", body: "The part needed has been ordered. Work continues when it arrives." },
   IN_PROGRESS: { title: "Repair in progress", body: "A technician is working on your device." },
+  OUTSOURCED: { title: "With a specialist", body: "Your device is with a specialist repair partner. We will check it here when it comes back." },
   TESTING: { title: "Testing", body: "The repair is done and the device is being tested." },
   READY: { title: "Ready to collect", body: "Your device is ready. Please bring your job slip." },
   COLLECTED: { title: "Collected", body: "This device has been handed over. Thank you." },
   CANCELLED: { title: "Cancelled", body: "This job was cancelled. Please contact the shop about your device." },
 };
-const stageOf = (s: string) => (s === "AWAITING_APPROVAL" ? 1 : s === "AWAITING_PARTS" ? 2 : STAGES.indexOf(s));
+const stageOf = (s: string) => (s === "AWAITING_APPROVAL" ? 1 : s === "AWAITING_PARTS" ? 2 : s === "OUTSOURCED" ? 2 : STAGES.indexOf(s));
 const fmt = (d: Date) => new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Colombo", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }).format(d);
 
 export default async function Track({ params }: { params: Promise<{ token: string }> }) {
@@ -26,11 +27,13 @@ export default async function Track({ params }: { params: Promise<{ token: strin
   if (!/^[A-Za-z0-9_-]{20,40}$/.test(token)) notFound();
   const job = await db.repairJob.findUnique({
     where: { trackToken: token },
-    select: { number: true, deviceBrand: true, deviceModel: true, status: true, estimate: true, total: true, paid: true, promisedAt: true, updatedAt: true, collectedAt: true, location: { select: { name: true, phone: true, business: { select: { name: true } } } } },
+    select: { number: true, deviceBrand: true, deviceModel: true, status: true, outcome: true, estimate: true, total: true, paid: true, promisedAt: true, updatedAt: true, collectedAt: true, location: { select: { name: true, phone: true, business: { select: { name: true } } } } },
   });
   // Links stop working 30 days after collection.
   if (!job || (job.collectedAt && Date.now() - job.collectedAt.getTime() > 30 * 86_400_000)) notFound();
-  const t = TEXT[job.status] ?? { title: job.status, body: "" };
+  const t = job.status === "READY" && job.outcome === "NOT_REPAIRED"
+    ? { title: "Ready to collect — not repaired", body: "Sorry, we could not repair your device. Please collect it from the shop, or call us to talk about it." }
+    : TEXT[job.status] ?? { title: job.status, body: "" };
   const at = stageOf(job.status);
   const due = Number(job.total) - Number(job.paid);
   return (

@@ -21,12 +21,21 @@ export const REPAIR_STATUS: Record<string, { label: string; tone: "ok" | "warn" 
   AWAITING_APPROVAL: { label: "Awaiting customer approval", tone: "warn", next: ["IN_PROGRESS", "AWAITING_PARTS", "CANCELLED"] },
   AWAITING_PARTS: { label: "Awaiting parts", tone: "warn", next: ["IN_PROGRESS", "CANCELLED"] },
   IN_PROGRESS: { label: "In progress", tone: "warn", next: ["TESTING", "READY", "AWAITING_PARTS"] },
+  // Left only by recording the device back from the outside shop (returnFromOutside), which moves it to Testing.
+  OUTSOURCED: { label: "At outside shop", tone: "warn", next: [] },
   TESTING: { label: "Testing", tone: "warn", next: ["READY", "IN_PROGRESS"] },
   READY: { label: "Ready to collect", tone: "ok", next: ["COLLECTED", "IN_PROGRESS"] },
   COLLECTED: { label: "Collected", tone: "muted", next: [] },
   CANCELLED: { label: "Cancelled", tone: "muted", next: [] },
 };
-const OPEN = ["RECEIVED", "DIAGNOSIS", "AWAITING_APPROVAL", "AWAITING_PARTS", "IN_PROGRESS", "TESTING", "READY"];
+const OPEN = ["RECEIVED", "DIAGNOSIS", "AWAITING_APPROVAL", "AWAITING_PARTS", "IN_PROGRESS", "OUTSOURCED", "TESTING", "READY"];
+
+export const ROUTES: Record<string, string> = { IN_HOUSE: "In-house", OUTSOURCED: "Outsourced" };
+export const OUTCOMES: Record<string, string> = { REPAIRED: "Repaired", NOT_REPAIRED: "Could not repair" };
+export const FAIL_REASONS = ["Parts not available", "Beyond repair", "Customer declined the cost", "Outside shop could not fix it", "Other"];
+// Statuses a device can be sent out from: not while waiting at the counter for collection or already out.
+const CAN_SEND_OUT = ["RECEIVED", "DIAGNOSIS", "AWAITING_APPROVAL", "AWAITING_PARTS", "IN_PROGRESS", "TESTING"];
+export const canSendOut = (s: string) => CAN_SEND_OUT.includes(s);
 export const isOpen = (s: string) => OPEN.includes(s);
 
 const deviceName = (j: { deviceBrand: string | null; deviceModel: string }) => [j.deviceBrand, j.deviceModel].filter(Boolean).join(" ");
@@ -170,24 +179,46 @@ export async function createRepair(user: CurrentUser, raw: unknown) {
 
 // ───────────── Workflow ─────────────
 
-export async function changeStatus(user: CurrentUser, jobId: string, to: string, note: string | null) {
+export type Outcome = { result: "REPAIRED" | "NOT_REPAIRED"; reason?: string | null; fee?: number | null };
+
+export async function changeStatus(user: CurrentUser, jobId: string, to: string, note: string | null, outcome: Outcome | null = null) {
   const result = await posting(async (tx) => {
     const job = await lockJob(tx, jobId);
     const allowed = REPAIR_STATUS[job.status]?.next ?? [];
     if (!allowed.includes(to)) throw new RepairError(`A job that is “${REPAIR_STATUS[job.status]?.label}” cannot move to “${REPAIR_STATUS[to]?.label ?? to}”.`);
     if (to === "COLLECTED" && due(job).gt(0) && !can(user, "sales.credit_override"))
       throw new RepairError(`Rs. ${due(job).toFixed(2)} is still due. Take payment before handing over.`);
+    if (to === "COLLECTED" && due(job).lt(0))
+      throw new RepairError(`The customer paid Rs. ${due(job).neg().toFixed(2)} more than the bill. Refund it before handing over.`);
     if (to === "CANCELLED" && job.parts.some((p) => D(p.qtyIssued).gt(p.qtyReturned)))
       throw new RepairError("Return the issued parts to stock before cancelling the job.");
     const data: Prisma.RepairJobUpdateInput = { status: to };
-    if (to === "READY") data.readyAt = new Date();
+    let outcomeNote = "";
+    if (to === "READY") {
+      // Ready always says whether the device was fixed, so a failed job is never handed over as a repaired one.
+      if (!outcome || !OUTCOMES[outcome.result]) throw new RepairError("Say whether the device was repaired.");
+      if (outcome.result === "NOT_REPAIRED" && !outcome.reason?.trim()) throw new RepairError("Choose why it could not be repaired.");
+      if (outcome.fee != null && !(outcome.fee >= 0)) throw new RepairError("The checking fee cannot be negative.");
+      data.readyAt = new Date();
+      data.outcome = outcome.result;
+      data.outcomeReason = outcome.result === "NOT_REPAIRED" ? outcome.reason!.trim().slice(0, 300) : null;
+      if (outcome.result === "NOT_REPAIRED") {
+        data.warrantyDays = null; // nothing was fixed, so nothing is under repair warranty
+        if (outcome.fee != null) data.labourCharge = outcome.fee; // the checking / inspection fee replaces labour
+      }
+      outcomeNote = outcome.result === "REPAIRED" ? "Repaired" : `Could not repair: ${data.outcomeReason}`;
+    }
+    // Reopened for more work: the earlier result no longer stands.
+    if (job.status === "READY" && to === "IN_PROGRESS") { data.outcome = null; data.outcomeReason = null; }
     if (to === "COLLECTED") {
       data.collectedAt = new Date();
       // Handover policy: the unlock credential is no longer needed and is deleted (history stays).
       if (job.credentialCipher) { data.credentialCipher = null; data.credentialPurgedAt = new Date(); }
     }
     await tx.repairJob.update({ where: { id: jobId }, data });
-    await event(tx, jobId, user.personId, "STATUS", { fromStatus: job.status, toStatus: to, note: note ?? undefined });
+    if (to === "READY" && outcome?.result === "NOT_REPAIRED" && outcome.fee != null) await recompute(tx, jobId);
+    const fullNote = [outcomeNote, note].filter(Boolean).join(" — ");
+    await event(tx, jobId, user.personId, "STATUS", { fromStatus: job.status, toStatus: to, note: fullNote || undefined });
     // Technician commission: a share of the labour charged, earned once, when the customer collects. It then goes
     // through the same approval and payout as sales commission. Free warranty work (no labour) earns nothing.
     if (to === "COLLECTED" && job.technicianId) {
@@ -199,11 +230,11 @@ export async function changeStatus(user: CurrentUser, jobId: string, to: string,
         await tx.commissionAccrual.create({ data: { repairJobId: jobId, recipientId: job.technicianId, role: "TECHNICIAN", basis: labour.toDecimalPlaces(2), amount } });
     }
     if (to === "COLLECTED" && job.credentialCipher) await event(tx, jobId, user.personId, "CREDENTIAL_PURGED", { note: "Deleted at handover" });
-    return job;
+    return tx.repairJob.findUniqueOrThrow({ where: { id: jobId }, include: { customer: true } });
   });
   if (to === "READY") {
     const d = due(result);
-    if (await enqueueSms("REPAIR_READY", { to: result.customer.phone, vars: { job: result.number, device: deviceName(result), due: d.gt(0) ? ` Balance Rs.${d.toFixed(2)}.` : "" }, sourceType: "RepairJob", sourceId: jobId, key: new Date().toISOString().slice(0, 13) })) kickSms();
+    if (await enqueueSms(result.outcome === "NOT_REPAIRED" ? "REPAIR_NOT_REPAIRED" : "REPAIR_READY", { to: result.customer.phone, vars: { job: result.number, device: deviceName(result), due: d.gt(0) ? ` Balance Rs.${d.toFixed(2)}.` : "" }, sourceType: "RepairJob", sourceId: jobId, key: new Date().toISOString().slice(0, 13) })) kickSms();
   }
 }
 
@@ -238,7 +269,9 @@ export async function setCharges(user: CurrentUser, jobId: string, raw: { labour
     const job = await lockJob(tx, jobId);
     if (!isOpen(job.status)) throw new RepairError("This job is closed.");
     for (const v of [raw.labour, raw.other, raw.discount, raw.externalCost]) if (!(v >= 0)) throw new RepairError("Charges cannot be negative.");
-    await tx.repairJob.update({ where: { id: jobId }, data: { labourCharge: raw.labour, otherCharge: raw.other, discount: raw.discount, externalCost: raw.externalCost, warrantyDays: raw.warrantyDays } });
+    // With outside-shop trips on record, their charges are the outside cost; the typed figure is ignored.
+    const trips = await tx.repairOutsource.count({ where: { jobId } });
+    await tx.repairJob.update({ where: { id: jobId }, data: { labourCharge: raw.labour, otherCharge: raw.other, discount: raw.discount, ...(trips ? {} : { externalCost: raw.externalCost }), warrantyDays: raw.warrantyDays } });
     const total = await recompute(tx, jobId);
     await event(tx, jobId, user.personId, "CHARGES", { note: `Labour ${raw.labour}, other ${raw.other}, discount ${raw.discount} → total ${total.toFixed(2)}` });
   });
@@ -249,6 +282,94 @@ export async function takeRepairPayment(user: CurrentUser, jobId: string, raw: {
     const job = await lockJob(tx, jobId);
     if (job.status === "CANCELLED") throw new RepairError("This job is cancelled.");
     await recordPayment(tx, user, job, raw);
+  });
+}
+
+// ───────────── Route: in-house or outside shop ─────────────
+
+export async function setRoute(user: CurrentUser, jobId: string, route: string) {
+  if (!ROUTES[route]) throw new RepairError("Choose in-house or outsourced.");
+  await posting(async (tx) => {
+    const job = await lockJob(tx, jobId);
+    if (!isOpen(job.status) || job.status === "READY") throw new RepairError("This job is finished; its route can no longer change.");
+    if (job.route === route) return;
+    if (job.status === "OUTSOURCED") throw new RepairError("The device is still at the outside shop. Record it back first.");
+    await tx.repairJob.update({ where: { id: jobId }, data: { route } });
+    await event(tx, jobId, user.personId, "ROUTE", { note: ROUTES[route] });
+  });
+}
+
+const sumCosts = async (tx: Tx, jobId: string) =>
+  (await tx.repairOutsource.findMany({ where: { jobId }, select: { cost: true } })).reduce((a, o) => a.plus(D(o.cost ?? 0)), ZERO).toDecimalPlaces(2);
+
+export const sendOutInput = z.object({
+  vendorId: z.string().min(1, "Choose the outside shop."),
+  expectedAt: z.coerce.date().nullable().default(null),
+  quote: z.coerce.number().min(0, "The quote cannot be negative.").nullable().default(null),
+  note: z.string().max(300).nullable().default(null),
+});
+
+export async function sendOutside(user: CurrentUser, jobId: string, raw: unknown) {
+  const input = sendOutInput.parse(raw);
+  await posting(async (tx) => {
+    const job = await lockJob(tx, jobId);
+    if (!canSendOut(job.status)) throw new RepairError(`A job that is “${REPAIR_STATUS[job.status]?.label}” cannot be sent out.`);
+    const vendor = await tx.contact.findUnique({ where: { id: input.vendorId } });
+    if (!vendor || !vendor.active) throw new RepairError("That outside shop was not found.");
+    if (!vendor.isSupplier) await tx.contact.update({ where: { id: vendor.id }, data: { isSupplier: true } });
+    await tx.repairOutsource.create({ data: { jobId, vendorId: vendor.id, expectedAt: input.expectedAt, quote: input.quote, note: input.note, createdById: user.personId } });
+    await tx.repairJob.update({ where: { id: jobId }, data: { status: "OUTSOURCED", route: "OUTSOURCED" } });
+    const extra = [input.quote != null ? `quote Rs. ${D(input.quote).toFixed(2)}` : "", input.note ?? ""].filter(Boolean).join(" · ");
+    await event(tx, jobId, user.personId, "OUTSOURCE_SENT", { fromStatus: job.status, toStatus: "OUTSOURCED", note: `Sent to ${vendor.name}${extra ? ` — ${extra}` : ""}` });
+  });
+}
+
+export const returnInput = z.object({
+  outsourceId: z.string().min(1),
+  cost: z.coerce.number().min(0, "The charge cannot be negative.").nullable().default(null),
+  result: z.enum(["REPAIRED", "NOT_REPAIRED"], { message: "Say whether the outside shop fixed it." }),
+  note: z.string().max(300).nullable().default(null),
+});
+
+export async function returnFromOutside(user: CurrentUser, jobId: string, raw: unknown) {
+  const input = returnInput.parse(raw);
+  await posting(async (tx) => {
+    const job = await lockJob(tx, jobId);
+    const trip = await tx.repairOutsource.findUnique({ where: { id: input.outsourceId }, include: { vendor: true } });
+    if (!trip || trip.jobId !== jobId) throw new RepairError("That outside-shop record is not on this job.");
+    if (trip.returnedAt) throw new RepairError("This device was already recorded back from that shop.");
+    await tx.repairOutsource.update({ where: { id: trip.id }, data: { returnedAt: new Date(), cost: input.cost, result: input.result, note: [trip.note, input.note].filter(Boolean).join(" / ") || null } });
+    // Back in the shop: it is checked here before it goes to Ready (or out again to another shop).
+    await tx.repairJob.update({ where: { id: jobId }, data: { externalCost: await sumCosts(tx, jobId), ...(job.status === "OUTSOURCED" ? { status: "TESTING" } : {}) } });
+    const what = input.result === "REPAIRED" ? "fixed" : "not fixed";
+    await event(tx, jobId, user.personId, "OUTSOURCE_BACK", {
+      fromStatus: job.status, toStatus: job.status === "OUTSOURCED" ? "TESTING" : undefined,
+      note: `Back from ${trip.vendor.name} — ${what}${input.cost != null ? `, charged Rs. ${D(input.cost).toFixed(2)}` : ""}${input.note ? ` · ${input.note}` : ""}`,
+    });
+  });
+}
+
+// Give back money paid above the bill (e.g. an advance larger than the checking fee), or the advance on a cancelled job.
+export async function refundRepair(user: CurrentUser, jobId: string, raw: { amount: number; method: string; accountId: string | null; reference: string | null }) {
+  await posting(async (tx) => {
+    const job = await lockJob(tx, jobId);
+    const amount = D(raw.amount).toDecimalPlaces(2);
+    if (job.status !== "READY" && job.status !== "CANCELLED") throw new RepairError("Refund once the job is ready (the bill is final) or cancelled.");
+    const owed = job.status === "CANCELLED" ? D(job.paid) : D(job.paid).minus(job.total);
+    if (amount.lte(0)) throw new RepairError("Enter the amount to refund.");
+    if (amount.gt(owed)) throw new RepairError(`At most Rs. ${Prisma.Decimal.max(owed, 0).toFixed(2)} can be refunded on this job.`);
+    if (!["CASH", "CARD", "BANK_TRANSFER", "OTHER"].includes(raw.method)) throw new RepairError("Choose how the money is given back.");
+    let accountId = raw.accountId ?? null;
+    const registerId = raw.method === "CASH" ? await cashRegister(tx, user, job.locationId) : null;
+    if (!accountId) {
+      const type = raw.method === "CASH" ? "CASH" : raw.method === "CARD" ? "CARD" : "BANK";
+      accountId = (await tx.account.findFirst({ where: { active: true, type, OR: [{ locationId: job.locationId }, { locationId: null }] }, orderBy: { createdAt: "asc" } }))?.id ?? null;
+    }
+    await tx.payment.create({
+      data: { number: await nextNumber(tx, "PAYMENT_OUT"), direction: "OUT", method: raw.method, amount, accountId, registerId, contactId: job.customerId, repairJobId: job.id, reference: raw.reference ?? null, createdById: user.personId },
+    });
+    await tx.repairJob.update({ where: { id: jobId }, data: { paid: { decrement: amount } } });
+    await event(tx, jobId, user.personId, "REFUND", { note: `${raw.method.toLowerCase().replace("_", " ")} ${amount.toFixed(2)} given back` });
   });
 }
 
@@ -284,6 +405,8 @@ export async function issuePart(user: CurrentUser, jobId: string, raw: { product
         allocations: picks.map((p) => ({ layerId: p.layerId, qty: p.qty.toString(), unitCost: p.unitCost.toString(), returnedQty: "0" })),
       },
     });
+    // Issuing a part before the route was chosen means we are fixing it ourselves.
+    if (!job.route) await tx.repairJob.update({ where: { id: jobId }, data: { route: "IN_HOUSE" } });
     await recompute(tx, jobId);
     await event(tx, jobId, user.personId, "PART_ISSUED", { note: `${product.name} × ${qty.toString()}` });
   });

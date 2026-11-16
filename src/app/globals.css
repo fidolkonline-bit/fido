@@ -247,6 +247,8 @@ table.dt { width: 100%; border-collapse: collapse; font-size: 13px; }
 
 /* Repair intake: tap-to-pick buttons, folded sections, bottom action bar */
 .picks { display: flex; flex-wrap: wrap; gap: 8px; }
+.route-btn { width: 100%; min-height: 64px; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; }
+.route-btn.btn-primary .muted { color: inherit; opacity: .8; }
 .pick { min-height: 38px; padding: 6px 14px; border-radius: 999px; font-size: 14px; }
 .pick[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--surface); }
 .pick[aria-pressed="true"]::before { content: "✓"; font-size: 12px; }

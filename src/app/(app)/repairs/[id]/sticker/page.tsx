@@ -44,8 +44,9 @@ export default async function Sticker({ params, searchParams }: { params: Promis
           <div><h3>{job.location.business.name.toUpperCase()}</h3><div className="small">{job.location.name}</div></div>
           <div className="small" style={{ textAlign: "right" }}><strong>REPAIR</strong><br />{job.number}<br />{fmtDateTime(job.createdAt)}</div>
         </div>
-        <div className="small" style={{ marginBottom: 8 }}>Customer: {job.customer.name}<br />Device: {device}{job.imei ? ` · ${job.imei}` : ""}<br />Issue: {job.problem}</div>
-        {D(job.labourCharge).gt(0) && <div className="totalrow"><span>Labour</span><strong>{money(job.labourCharge)}</strong></div>}
+        <div className="small" style={{ marginBottom: 8 }}>Customer: {job.customer.name}<br />Device: {device}{job.imei ? ` · ${job.imei}` : ""}<br />Issue: {job.problem}
+          {job.outcome === "NOT_REPAIRED" && <><br /><strong>Result: could not be repaired{job.outcomeReason ? ` (${job.outcomeReason.toLowerCase()})` : ""}</strong></>}</div>
+        {D(job.labourCharge).gt(0) && <div className="totalrow"><span>{job.outcome === "NOT_REPAIRED" ? "Checking fee" : "Labour"}</span><strong>{money(job.labourCharge)}</strong></div>}
         {job.parts.filter((p) => D(p.qtyIssued).gt(p.qtyReturned)).map((p) => (
           <div key={p.id} className="totalrow"><span>{p.product.name} × {D(p.qtyIssued).minus(p.qtyReturned).toString()}</span><strong>{money(D(p.qtyIssued).minus(p.qtyReturned).mul(p.unitPrice))}</strong></div>
         ))}

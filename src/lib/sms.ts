@@ -10,6 +10,7 @@ export const SMS_EVENTS = {
   REPAIR_RECEIVED: { label: "Repair received", vars: ["shop", "job", "device", "promised"], body: "{shop}: We received your {device} for repair. Job {job}. Expected: {promised}. Keep this SMS to collect." },
   REPAIR_ESTIMATE: { label: "Repair estimate", vars: ["shop", "job", "device", "estimate"], body: "{shop}: Repair estimate for {device} (job {job}) is Rs.{estimate}. Please call us to approve." },
   REPAIR_READY: { label: "Repair ready", vars: ["shop", "job", "device", "due"], body: "{shop}: Your {device} (job {job}) is ready to collect.{due}" },
+  REPAIR_NOT_REPAIRED: { label: "Repair not possible", vars: ["shop", "job", "device", "due"], body: "{shop}: Sorry, we could not repair your {device} (job {job}). Please collect it from the shop.{due}" },
   DEBT_RECEIPT: { label: "Debt payment receipt", vars: ["shop", "receipt", "amount", "balance"], body: "{shop}: Received Rs.{amount} towards your balance. Receipt {receipt}. Balance due Rs.{balance}. Thank you!" },
   RELOAD_DONE: { label: "Reload completed", vars: ["shop", "mobile", "amount", "ref"], body: "{shop}: Reload Rs.{amount} to {mobile} successful. Ref {ref}." },
   INSTALMENT_DUE: { label: "Instalment reminder", vars: ["shop", "amount", "date", "invoice"], body: "{shop}: Reminder — your instalment of Rs.{amount} for invoice {invoice} is due on {date}. Thank you." },

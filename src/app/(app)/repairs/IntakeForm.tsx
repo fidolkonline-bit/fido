@@ -59,8 +59,13 @@ export function IntakeForm({ technicians, terms, prefill }: { technicians: { id:
   const problemParts = f.problem.split(",").map((s) => s.trim()).filter(Boolean);
   const toggleProblem = (p: string) => set("problem", (problemParts.includes(p) ? problemParts.filter((x) => x !== p) : [...problemParts, p]).join(", "));
 
-  const extrasFilled = [f.deviceBrand, f.color, f.serial, f.serviceType !== "CARRY_IN", f.condition, f.technicianId, f.estimate, f.promisedAt, Number(deposit.amount) > 0].filter(Boolean).length;
-  const missing = [!customer && "customer", !f.deviceModel.trim() && "model", !f.problem.trim() && "problem", credType !== "NONE" && !cred && "unlock code"].filter(Boolean) as string[];
+  const extrasFilled = [f.deviceBrand, f.color, f.serial, f.serviceType !== "CARRY_IN", f.condition, f.technicianId, f.promisedAt].filter(Boolean).length;
+  const estimateN = Number(f.estimate);
+  const depositN = Number(deposit.amount);
+  const advanceOver = f.estimate !== "" && depositN > 0 && depositN > estimateN;
+  const badNumber = (v: string) => v.trim() !== "" && !(Number(v) >= 0);
+  const missing = [!customer && "customer", !f.deviceModel.trim() && "model", !f.problem.trim() && "problem", credType !== "NONE" && !cred && "unlock code",
+    badNumber(f.estimate) && "a valid estimate", badNumber(deposit.amount) && "a valid advance"].filter(Boolean) as string[];
 
   const submit = () => start(async () => {
     setError(null);
@@ -146,15 +151,27 @@ export function IntakeForm({ technicians, terms, prefill }: { technicians: { id:
         <p className="small muted" style={{ margin: 0 }}>Kept encrypted and deleted at handover. Never printed or sent by SMS.</p>
       </section>
 
+      <section className="panel stack">
+        <h2 style={{ margin: 0 }}>5 · Estimate and advance</h2>
+        <div className="grid3">
+          <label className="field"><span>Estimated cost (Rs.)</span><input value={f.estimate} onChange={(e) => set("estimate", e.target.value)} inputMode="decimal" placeholder="Leave empty if not known yet" /></label>
+          <label className="field"><span>Advance paid now (Rs.)</span><input value={deposit.amount} onChange={(e) => setDeposit({ ...deposit, amount: e.target.value })} inputMode="decimal" placeholder="0.00" /></label>
+          {depositN > 0 && (
+            <div className="field"><span>Advance paid by</span>
+              <div className="picks">{([["CASH", "Cash"], ["CARD", "Card"], ["BANK_TRANSFER", "Bank transfer"]] as const).map(([m, label]) => <Pick key={m} on={deposit.method === m} onClick={() => setDeposit({ ...deposit, method: m })}>{label}</Pick>)}</div>
+            </div>
+          )}
+        </div>
+        {f.estimate !== "" && estimateN > 0 && depositN > 0 && !advanceOver && <p className="small muted" style={{ margin: 0 }}>Balance after advance: Rs. {(estimateN - depositN).toFixed(2)} (the final bill may differ after diagnosis).</p>}
+        {advanceOver && <p className="small" style={{ margin: 0, color: "var(--warn)" }}>The advance is more than the estimate. Check the amounts.</p>}
+        {!f.estimate && <p className="small muted" style={{ margin: 0 }}>No price yet? Leave it empty and add the estimate after diagnosis; the customer can be asked to approve it by SMS.</p>}
+        {depositN > 0 && deposit.method === "CASH" && <p className="small muted" style={{ margin: 0 }}>Cash goes into your open cash register.</p>}
+      </section>
+
       <details className="panel fold" open={!!prefill?.serial || undefined}>
-        <summary><h2>More details</h2><span className="small muted">{extrasFilled ? `${extrasFilled} filled` : "optional — technician, estimate, date…"}</span></summary>
+        <summary><h2>More details</h2><span className="small muted">{extrasFilled ? `${extrasFilled} filled` : "optional — technician, ready-by date, condition…"}</span></summary>
         <div className="stack">
-          <div className="grid3">
-            <label className="field"><span>Technician</span><select value={f.technicianId} onChange={(e) => set("technicianId", e.target.value)}><option value="">Not assigned</option>{technicians.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select></label>
-            <label className="field"><span>Estimate (Rs.)</span><input value={f.estimate} onChange={(e) => set("estimate", e.target.value)} inputMode="decimal" /></label>
-            <label className="field"><span>Advance paid (Rs.)</span><input value={deposit.amount} onChange={(e) => setDeposit({ ...deposit, amount: e.target.value })} inputMode="decimal" placeholder="0.00" /></label>
-            {Number(deposit.amount) > 0 && <label className="field"><span>Advance paid by</span><select value={deposit.method} onChange={(e) => setDeposit({ ...deposit, method: e.target.value })}><option value="CASH">Cash</option><option value="CARD">Card</option><option value="BANK_TRANSFER">Bank transfer</option></select></label>}
-          </div>
+          <label className="field" style={{ maxWidth: 300 }}><span>Technician</span><select value={f.technicianId} onChange={(e) => set("technicianId", e.target.value)}><option value="">Not assigned</option>{technicians.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select></label>
           <div>
             <p className="pick-label">Ready by</p>
             <div className="row">
@@ -177,7 +194,7 @@ export function IntakeForm({ technicians, terms, prefill }: { technicians: { id:
       </details>
 
       <section className="panel stack">
-        <h2 style={{ margin: 0 }}>5 · Finish</h2>
+        <h2 style={{ margin: 0 }}>6 · Finish</h2>
         <label className="check"><input type="checkbox" checked={notify} onChange={(e) => setNotify(e.target.checked)} /> SMS the job number to the customer</label>
         <label className="check"><input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} /> The customer accepts the repair terms</label>
         <details className="fold">

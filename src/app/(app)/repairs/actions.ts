@@ -29,7 +29,38 @@ export async function submitIntake(payload: unknown): Promise<Res> {
 export async function doStatus(_: Res | undefined, f: FormData): Promise<Res> {
   const user = await requirePermission("repairs.manage");
   const id = String(f.get("jobId"));
-  return run(id, () => R.changeStatus(user, id, String(f.get("to")), str(f, "note")));
+  const to = String(f.get("to"));
+  const result = str(f, "outcome");
+  const outcome = to === "READY" && (result === "REPAIRED" || result === "NOT_REPAIRED") ? { result, reason: str(f, "reason"), fee: num(f, "fee") } as R.Outcome : null;
+  return run(id, () => R.changeStatus(user, id, to, str(f, "note"), outcome));
+}
+
+export async function doRoute(_: Res | undefined, f: FormData): Promise<Res> {
+  const user = await requirePermission("repairs.manage");
+  const id = String(f.get("jobId"));
+  return run(id, () => R.setRoute(user, id, String(f.get("route"))));
+}
+
+export async function doSendOutside(_: Res | undefined, f: FormData): Promise<Res> {
+  const user = await requirePermission("repairs.manage");
+  const id = String(f.get("jobId"));
+  const expected = str(f, "expectedAt");
+  return run(id, () => R.sendOutside(user, id, { vendorId: str(f, "vendorId") ?? "", expectedAt: expected ? new Date(expected) : null, quote: num(f, "quote"), note: str(f, "note") }));
+}
+
+export async function doReturnFromOutside(_: Res | undefined, f: FormData): Promise<Res> {
+  const user = await requirePermission("repairs.manage");
+  const id = String(f.get("jobId"));
+  return run(id, () => R.returnFromOutside(user, id, { outsourceId: String(f.get("outsourceId")), cost: num(f, "cost"), result: str(f, "result") ?? "", note: str(f, "note") }));
+}
+
+// Add an outside repair shop without leaving the job (saved as a supplier contact).
+export async function quickAddRepairShop(name: string, phone: string): Promise<{ id?: string; name?: string; error?: string }> {
+  await requirePermission("repairs.manage");
+  const n = name.trim();
+  if (!n) return { error: "Shop name is required." };
+  const c = await db.contact.create({ data: { name: n.slice(0, 100), phone: phone.trim() || null, isCustomer: false, isSupplier: true } });
+  return { id: c.id, name: c.name };
 }
 
 export async function doDiagnosis(_: Res | undefined, f: FormData): Promise<Res> {
@@ -56,6 +87,12 @@ export async function doPayment(_: Res | undefined, f: FormData): Promise<Res> {
   const user = await requirePermission("repairs.manage");
   const id = String(f.get("jobId"));
   return run(id, () => R.takeRepairPayment(user, id, { amount: num(f, "amount") ?? 0, method: String(f.get("method")), accountId: str(f, "accountId"), reference: str(f, "reference") }));
+}
+
+export async function doRefund(_: Res | undefined, f: FormData): Promise<Res> {
+  const user = await requirePermission("repairs.manage");
+  const id = String(f.get("jobId"));
+  return run(id, () => R.refundRepair(user, id, { amount: num(f, "amount") ?? 0, method: String(f.get("method")), accountId: str(f, "accountId"), reference: str(f, "reference") }));
 }
 
 export async function doIssuePart(jobId: string, payload: { productId: string; qty: number; unitPrice: number; layerId: string | null }): Promise<Res> {

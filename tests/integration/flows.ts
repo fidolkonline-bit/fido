@@ -8,7 +8,7 @@ import { createTradeIn } from "../../src/lib/tradeins";
 import { openCount, postCount, saveCounted, scanInto } from "../../src/lib/stockcount";
 import { createPlan, planProgress } from "../../src/lib/instalments";
 import { pointsBalance, redeemPoints } from "../../src/lib/loyalty";
-import { createRepair, changeStatus, setCharges } from "../../src/lib/repairs";
+import { createRepair, changeStatus, setCharges, setRoute, sendOutside, returnFromOutside, refundRepair } from "../../src/lib/repairs";
 import { postReturn } from "../../src/lib/returns";
 import { availability, storeCreditBalance } from "../../src/lib/stock";
 import { loginLocked, recordLoginAttempt } from "../../src/lib/login-guard";
@@ -170,11 +170,53 @@ async function main() {
     assert.ok(job.trackToken && job.trackToken.length >= 20); assert.ok(job.termsAcceptedAt && job.termsText);
     await setCharges(owner, j.id, { labour: 5000, other: 0, discount: 500, externalCost: 0, warrantyDays: 30 });
     await changeStatus(owner, j.id, "IN_PROGRESS", null);
-    await changeStatus(owner, j.id, "READY", null);
+    await fails(() => changeStatus(owner, j.id, "READY", null), /repaired/);
+    await changeStatus(owner, j.id, "READY", null, { result: "REPAIRED" });
     await db.repairJob.update({ where: { id: j.id }, data: { paid: 4500 } });
     await changeStatus(owner, j.id, "COLLECTED", null);
     const acc = await db.commissionAccrual.findMany({ where: { repairJobId: j.id } });
     assert.equal(acc.length, 1); assert.equal(acc[0].role, "TECHNICIAN"); assert.equal(acc[0].amount.toFixed(2), "900.00");
+  });
+
+  await step("repair: outsourced to another shop, back not fixed, ready as not repaired", async () => {
+    const cust = await db.contact.create({ data: { name: "Outsource test customer" } });
+    const shop = await db.contact.create({ data: { name: "Board repair shop", isCustomer: false } });
+    const j = await createRepair(owner, { idempotencyKey: randomUUID(), customerId: cust.id, deviceModel: "iPhone 11", problem: "No power", estimate: 12000, deposit: { amount: 2000, method: "CASH" }, notifyCustomer: false });
+    await setRoute(owner, j.id, "OUTSOURCED");
+    await sendOutside(owner, j.id, { vendorId: shop.id, quote: 8000, note: "board" });
+    let job = await db.repairJob.findUniqueOrThrow({ where: { id: j.id } });
+    assert.equal(job.status, "OUTSOURCED"); assert.equal(job.route, "OUTSOURCED");
+    assert.ok((await db.contact.findUniqueOrThrow({ where: { id: shop.id } })).isSupplier);
+    await fails(() => changeStatus(owner, j.id, "READY", null, { result: "REPAIRED" }), /cannot move/);
+    await fails(() => setRoute(owner, j.id, "IN_HOUSE"), /outside shop/);
+    await fails(() => sendOutside(owner, j.id, { vendorId: shop.id }), /cannot be sent/);
+    const trip = await db.repairOutsource.findFirstOrThrow({ where: { jobId: j.id } });
+    await returnFromOutside(owner, j.id, { outsourceId: trip.id, cost: 1500, result: "NOT_REPAIRED" });
+    await fails(() => returnFromOutside(owner, j.id, { outsourceId: trip.id, cost: 1500, result: "NOT_REPAIRED" }), /already/);
+    job = await db.repairJob.findUniqueOrThrow({ where: { id: j.id } });
+    assert.equal(job.status, "TESTING"); assert.equal(job.externalCost.toFixed(2), "1500.00");
+    // A typed outside cost is ignored once outside-shop records exist.
+    await setCharges(owner, j.id, { labour: 0, other: 0, discount: 0, externalCost: 99, warrantyDays: 30 });
+    assert.equal((await db.repairJob.findUniqueOrThrow({ where: { id: j.id } })).externalCost.toFixed(2), "1500.00");
+    await fails(() => changeStatus(owner, j.id, "READY", null, { result: "NOT_REPAIRED" }), /why/);
+    // Paid ahead before the bill is final: no refund yet.
+    await fails(() => refundRepair(owner, j.id, { amount: 100, method: "CASH", accountId: null, reference: null }), /ready/);
+    await changeStatus(owner, j.id, "READY", null, { result: "REPAIRED" });
+    // Reopened: the result is cleared until it is ready again.
+    await changeStatus(owner, j.id, "IN_PROGRESS", null);
+    assert.equal((await db.repairJob.findUniqueOrThrow({ where: { id: j.id } })).outcome, null);
+    await changeStatus(owner, j.id, "READY", null, { result: "NOT_REPAIRED", reason: "Beyond repair", fee: 500 });
+    job = await db.repairJob.findUniqueOrThrow({ where: { id: j.id } });
+    assert.equal(job.outcome, "NOT_REPAIRED"); assert.equal(job.outcomeReason, "Beyond repair");
+    assert.equal(job.total.toFixed(2), "500.00"); assert.equal(job.warrantyDays, null); assert.equal(job.paid.toFixed(2), "2000.00");
+    // The 2,000 advance is more than the 500 fee: 1,500 goes back before handover, and no more than that.
+    await fails(() => changeStatus(owner, j.id, "COLLECTED", null), /Refund/);
+    await fails(() => refundRepair(owner, j.id, { amount: 1600, method: "CASH", accountId: null, reference: null }), /At most/);
+    await refundRepair(owner, j.id, { amount: 1500, method: "CASH", accountId: null, reference: null });
+    const out = await db.payment.findFirstOrThrow({ where: { repairJobId: j.id, direction: "OUT" } });
+    assert.equal(out.amount.toFixed(2), "1500.00"); assert.ok(out.registerId);
+    await changeStatus(owner, j.id, "COLLECTED", null);
+    assert.equal((await db.repairJob.findUniqueOrThrow({ where: { id: j.id } })).paid.toFixed(2), "500.00");
   });
 
   await step("shared cash drawer: cash in/out, count with reason, hand-over and next opening", async () => {
