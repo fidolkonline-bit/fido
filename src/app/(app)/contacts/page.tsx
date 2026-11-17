@@ -94,6 +94,7 @@ export default async function Contacts({ searchParams }: { searchParams: Promise
         empty={filtered ? `No ${noun} match these filters.` : `No ${noun} yet.`}
         columns={[
           { label: supplier ? "Supplier" : "Customer", primary: true, render: (c) => <RowLink href={`/contacts/${c.id}`}>{c.name}</RowLink> },
+          ...(supplier ? [{ label: "Code", render: (c: (typeof contacts)[number]) => c.supplierCode ? <code>{c.supplierCode}</code> : "—" }] : []),
           { label: "Mobile", render: (c) => c.phone ? <a href={`tel:${c.phone}`}>{c.phone}</a> : "—" },
           ...(supplier ? [] : [{ label: "Group", render: (c: (typeof contacts)[number]) => c.group?.name ?? "—" }]),
           {

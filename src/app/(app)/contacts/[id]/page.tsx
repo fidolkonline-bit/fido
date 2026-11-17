@@ -47,6 +47,7 @@ export default async function ContactDetail({ params }: { params: Promise<{ id: 
       <div className="stats">
         {c.isCustomer && <Stat label="Customer due" value={`Rs. ${money(customerDue)}`} basis={`Opening ${money(openingLeft)} left + invoices − payments`} />}
         {c.isCustomer && <Stat label="Credit limit" value={c.creditLimit ? `Rs. ${money(c.creditLimit)}` : "No limit"} basis={c.payTermDays ? `${c.payTermDays}-day terms` : "No terms set"} />}
+        {c.isSupplier && <Stat label="Supplier code" value={c.supplierCode ?? "—"} basis={c.supplierCode ? `Next GRN lot ${c.supplierCode}-${String(c.lotSeq + 1).padStart(4, "0")}` : "Set one under Edit to auto-number lots"} />}
         {c.isSupplier && <Stat label="Payable to supplier" value={`Rs. ${money(supplierDue)}`} basis="Posted GRNs − payments − supplier credits" />}
         {c.isCustomer && (storeCredit.gt(0) || points > 0 || loyalty?.enabled) && <Stat label="Store credit" value={`Rs. ${money(storeCredit)}`} basis={loyalty?.enabled || points > 0 ? `${points.toLocaleString("en-LK")} loyalty points` : "From returns and trade-ins"} />}
         <Stat label="Mobile" value={c.phone ? <a href={`tel:${c.phone}`}>{c.phone}</a> : "—"} basis={c.group?.name} />

@@ -117,6 +117,17 @@ export async function postReceipt(user: CurrentUser, raw: unknown) {
       if (clash) throw new ReceiptError(`IMEI ${imeis.find((i) => i === clash.imei1 || i === clash.imei2)} is already in stock.`);
     }
 
+    // Lines received without a lot number share one lot built from the supplier code (MTCP-0001, MTCP-0002…),
+    // so the lot shown at sale tells staff which supplier the stock came from. Typed lot numbers are kept as entered.
+    let autoLot: string | null = null;
+    if (lines.some((l) => !l.lotCode?.trim())) {
+      const [s] = await tx.$queryRaw<{ supplierCode: string | null; lotSeq: number }[]>`
+        UPDATE "Contact" SET "lotSeq" = "lotSeq" + 1 WHERE id = ${input.supplierId} AND "supplierCode" IS NOT NULL
+        RETURNING "supplierCode", "lotSeq"`;
+      if (s?.supplierCode) autoLot = `${s.supplierCode}-${String(s.lotSeq).padStart(4, "0")}`;
+    }
+    for (const l of lines) l.lotCode = l.lotCode?.trim() || autoLot;
+
     const number = await nextNumber(tx, "GRN");
     const receivedAt = new Date();
     const receipt = await tx.goodsReceipt.create({

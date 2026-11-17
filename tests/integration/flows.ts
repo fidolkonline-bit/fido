@@ -10,6 +10,7 @@ import { createPlan, planProgress } from "../../src/lib/instalments";
 import { pointsBalance, redeemPoints } from "../../src/lib/loyalty";
 import { createRepair, changeStatus, setCharges, setRoute, sendOutside, returnFromOutside, refundRepair } from "../../src/lib/repairs";
 import { postReturn } from "../../src/lib/returns";
+import { postReceipt } from "../../src/lib/purchases";
 import { availability, storeCreditBalance } from "../../src/lib/stock";
 import { loginLocked, recordLoginAttempt } from "../../src/lib/login-guard";
 import type { CurrentUser } from "../../src/lib/auth";
@@ -266,6 +267,24 @@ async function main() {
     assert.equal([a, b].filter((x) => x.status === "fulfilled").length, 1);  // only one drawer opens
     const next = await db.registerSession.findFirstOrThrow({ where: { locationId: loc.id, closedAt: null } });
     assert.equal(next.expectedOpening?.toFixed(2), "5000.00");
+  });
+
+  await step("GRN lot numbers come from the supplier code; typed lots are kept", async () => {
+    const sup = await db.contact.create({ data: { name: `Multi Trade Center Peta ${randomUUID().slice(0, 4)}`, isSupplier: true, isCustomer: false, supplierCode: `MT${randomUUID().slice(0, 4).toUpperCase()}` } });
+    const grn = (lots: (string | null)[]) => postReceipt(owner, { idempotencyKey: randomUUID(), supplierId: sup.id, lines: lots.map((lotCode) => ({ productId: cover.id, lotCode, qtyReceived: 1, unitCost: 500 })) });
+    const lotsOf = async (id: string) => (await db.receiptLine.findMany({ where: { receiptId: id }, orderBy: { id: "asc" } })).map((l) => l.lotCode).sort();
+    const a = await grn([null, null]);
+    assert.deepEqual(await lotsOf(a.id), [`${sup.supplierCode}-0001`, `${sup.supplierCode}-0001`]);   // one lot per GRN
+    const b = await grn([" BOX-7 ", ""]);
+    assert.deepEqual(await lotsOf(b.id), ["BOX-7", `${sup.supplierCode}-0002`]);
+    const layer = await db.costLayer.findFirstOrThrow({ where: { receiptLine: { receiptId: b.id }, lotCode: `${sup.supplierCode}-0002` } });
+    assert.ok(layer);                                                                             // the lot staff see at sale
+    const c = await grn(["OWN-1"]);                                                                // nothing blank: no number used
+    assert.deepEqual(await lotsOf(c.id), ["OWN-1"]);
+    assert.equal((await db.contact.findUniqueOrThrow({ where: { id: sup.id } })).lotSeq, 2);
+    const plain = await db.contact.create({ data: { name: `No code ${randomUUID().slice(0, 4)}`, isSupplier: true, isCustomer: false } });
+    const d = await postReceipt(owner, { idempotencyKey: randomUUID(), supplierId: plain.id, lines: [{ productId: cover.id, lotCode: null, qtyReceived: 1, unitCost: 500 }] });
+    assert.deepEqual(await lotsOf(d.id), [null]);                                                  // no code: lot stays blank
   });
 
   await step("login lock after 5 wrong tries, cleared by a good one", async () => {

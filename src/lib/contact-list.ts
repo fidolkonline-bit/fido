@@ -66,7 +66,7 @@ export async function listContacts(f: ContactFilters, page: number | null, pageS
     ...(supplier ? { isSupplier: true } : { isCustomer: true }),
     ...(!supplier && f.group === "none" ? { groupId: null } : !supplier && f.group ? { groupId: f.group } : {}),
     ...(!supplier && f.bal === "over" ? { creditLimit: { not: null } } : {}),
-    ...(f.q ? { OR: [{ name: { contains: f.q, mode: "insensitive" } }, { phone: { contains: f.q } }, { code: { equals: f.q, mode: "insensitive" } }, { company: { contains: f.q, mode: "insensitive" } }] } : {}),
+    ...(f.q ? { OR: [{ name: { contains: f.q, mode: "insensitive" } }, { phone: { contains: f.q } }, { code: { equals: f.q, mode: "insensitive" } }, { supplierCode: { equals: f.q, mode: "insensitive" } }, { company: { contains: f.q, mode: "insensitive" } }] } : {}),
   };
   const orderBy: Prisma.ContactOrderByWithRelationInput[] = f.sort === "newest" ? [{ createdAt: "desc" }, { id: "asc" }] : [{ name: "asc" }, { id: "asc" }];
 

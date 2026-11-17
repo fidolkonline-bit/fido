@@ -20,6 +20,7 @@ const schema = z.object({
   openingBalance: z.number(),
   isCustomer: z.boolean(),
   isSupplier: z.boolean(),
+  supplierCode: z.string().regex(/^[A-Z0-9]{2,10}$/, "Supplier code must be 2–10 letters or numbers, no spaces (e.g. MTCP).").nullable(),
 });
 
 export async function saveContact(_: FormState, f: FormData): Promise<FormState> {
@@ -32,7 +33,12 @@ export async function saveContact(_: FormState, f: FormData): Promise<FormState>
       address: str(f, "address"), taxNumber: str(f, "taxNumber"), groupId: str(f, "groupId"),
       creditLimit: num(f, "creditLimit"), payTermDays: num(f, "payTermDays"), openingBalance: num(f, "openingBalance") ?? 0,
       isCustomer: f.get("isCustomer") === "on", isSupplier: f.get("isSupplier") === "on",
+      supplierCode: f.get("isSupplier") === "on" ? str(f, "supplierCode")?.toUpperCase().replace(/\s+/g, "") || null : null,
     });
+    if (data.supplierCode) {
+      const taken = await db.contact.findFirst({ where: { supplierCode: data.supplierCode, ...(id ? { id: { not: id } } : {}) }, select: { name: true } });
+      if (taken) return { error: `Supplier code ${data.supplierCode} is already used by ${taken.name}.` };
+    }
     if (!data.isCustomer && !data.isSupplier) return { error: "Mark the contact as a customer, a supplier, or both." };
     const c = id ? await db.contact.update({ where: { id }, data }) : await db.contact.create({ data });
     savedId = c.id;

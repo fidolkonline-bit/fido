@@ -23,7 +23,7 @@ export default async function NewReceipt({ searchParams }: { searchParams: Promi
     })),
   };
   const [suppliers, accounts] = await Promise.all([
-    db.contact.findMany({ where: { isSupplier: true, active: true }, orderBy: { name: "asc" }, select: { id: true, name: true } }),
+    db.contact.findMany({ where: { isSupplier: true, active: true }, orderBy: { name: "asc" }, select: { id: true, name: true, supplierCode: true } }),
     db.account.findMany({ where: { active: true, type: { not: "OWNER_COLLECTION" } }, orderBy: { name: "asc" }, select: { id: true, name: true, type: true } }),
   ]);
   return (

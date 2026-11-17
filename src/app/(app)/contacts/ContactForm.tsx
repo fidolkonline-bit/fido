@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import Link from "next/link";
 import { saveContact } from "./actions";
 import { SubmitButton } from "@/components/SubmitButton";
@@ -8,19 +8,26 @@ import { SubmitButton } from "@/components/SubmitButton";
 type C = {
   id: string; name: string; company: string | null; phone: string | null; email: string | null; address: string | null;
   taxNumber: string | null; groupId: string | null; creditLimit: string | null; payTermDays: number | null;
-  openingBalance: string; isCustomer: boolean; isSupplier: boolean;
+  openingBalance: string; isCustomer: boolean; isSupplier: boolean; supplierCode: string | null;
 };
 
 export function ContactForm({ contact, groups, defaultType }: { contact?: C; groups: { id: string; name: string }[]; defaultType?: string }) {
   const [state, action] = useActionState(saveContact, undefined);
   const c = contact;
+  const [isSupplier, setIsSupplier] = useState(c ? c.isSupplier : defaultType === "supplier");
   return (
     <form action={action} className="panel stack">
       {c && <input type="hidden" name="id" value={c.id} />}
       <div className="row" style={{ gap: 18 }}>
         <label className="check"><input type="checkbox" name="isCustomer" defaultChecked={c ? c.isCustomer : defaultType !== "supplier"} /> Customer</label>
-        <label className="check"><input type="checkbox" name="isSupplier" defaultChecked={c ? c.isSupplier : defaultType === "supplier"} /> Supplier</label>
+        <label className="check"><input type="checkbox" name="isSupplier" checked={isSupplier} onChange={(e) => setIsSupplier(e.target.checked)} /> Supplier</label>
       </div>
+      {isSupplier && (
+        <label className="field" style={{ maxWidth: 320 }}><span>Supplier code (for lot numbers)</span>
+          <input name="supplierCode" defaultValue={c?.supplierCode ?? ""} maxLength={10} autoCapitalize="characters" placeholder="e.g. MTCP" style={{ textTransform: "uppercase" }} />
+          <small className="muted">Letters and numbers, 2–10. Lots left blank on a GRN are numbered from it: MTCP-0001, MTCP-0002…</small>
+        </label>
+      )}
       <div className="grid2">
         <label className="field"><span>Name *</span><input name="name" defaultValue={c?.name} required /></label>
         <label className="field"><span>Mobile</span><input name="phone" type="tel" inputMode="tel" defaultValue={c?.phone ?? ""} /></label>
