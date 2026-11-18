@@ -230,6 +230,7 @@ table.dt { width: 100%; border-collapse: collapse; font-size: 13px; }
 .label.stock .l-barcode svg { flex: 1 1 auto; min-height: 0; display: block; }
 .label.stock .l-small { font-size: 6.5pt; line-height: 2.7mm; height: 2.7mm; flex: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .label.stock .l-digits { letter-spacing: 0.3pt; font-variant-numeric: tabular-nums; }
+.label.stock .l-lot { font-weight: 600; }
 .label.stock .l-bottom { display: flex; justify-content: center; align-items: baseline; gap: 1.5mm; flex: none; white-space: nowrap; overflow: hidden; }
 .label.stock .l-price { font-size: 10pt; line-height: 4.2mm; }
 .label-setup { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: start; }

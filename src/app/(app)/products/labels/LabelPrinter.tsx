@@ -221,7 +221,8 @@ function FieldChips({ fields, onToggle, changed, small }: { fields: LabelFields;
 function Label({ t, fields: f, data, business }: { t: LabelSize & { columns?: number }; fields: LabelFields; data: LabelData; business: string }) {
   const l: LabelLayout = layoutLabel(t, f, data.code);
   const top = [f.business && business, f.sku && data.sku].filter(Boolean) as string[];
-  const bottom = f.price || (f.lot && data.lot);
+  const lotUnder = !!l.barcode && f.lot && data.lot;
+  const bottom = f.price || (f.lot && data.lot && !l.barcode);
   return (
     <div className="label stock" style={{ width: `${t.widthMm}mm`, height: `${t.heightMm}mm`, padding: `${PAD}mm`, breakInside: "avoid" }}>
       {top.length > 0 && <div className="l-top" style={{ justifyContent: top.length > 1 ? "space-between" : "center" }}>{top.map((s, i) => <span key={i}>{s}</span>)}</div>}
@@ -234,13 +235,14 @@ function Label({ t, fields: f, data, business }: { t: LabelSize & { columns?: nu
             <path d={l.barcode.path} fill="#000" />
           </svg>
           {f.barcodeText && <span className="l-small l-digits">{data.code}</span>}
+          {lotUnder && <span className="l-small l-lot">Lot {data.lot}</span>}
         </div>
       )}
       {l.barcodeError && f.barcodeText && <span className="l-small">{data.code}</span>}
       {bottom && (
         <div className="l-bottom">
           {f.price && <span className="l-price">Rs. {Number(data.price).toLocaleString("en-LK")}</span>}
-          {f.lot && data.lot && <span className="l-small">Lot {data.lot}</span>}
+          {f.lot && data.lot && !l.barcode && <span className="l-small">Lot {data.lot}</span>}
         </div>
       )}
     </div>

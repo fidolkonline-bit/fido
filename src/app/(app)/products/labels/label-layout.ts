@@ -45,9 +45,12 @@ export function layoutLabel(t: LabelSize, f: LabelFields, value: string): LabelL
     try { barcode = fitBarcode(value, t); } catch (e) { barcodeError = e instanceof Error ? e.message : "This code cannot be printed as a barcode."; }
   }
   const top = f.business || f.sku;
-  const bottom = f.price || f.lot;
+  // With a barcode, the lot sits centred under the barcode digits; without one it goes on the bottom row.
+  const lotUnder = !!barcode && f.lot;
+  const bottom = f.price || (f.lot && !lotUnder);
   const rows = [top, f.name, !!barcode, bottom].filter(Boolean).length;
-  const fixed = (top ? SMALL_LINE : 0) + (bottom ? (f.price ? PRICE_LINE : SMALL_LINE) : 0) + (barcode && f.barcodeText ? SMALL_LINE : 0) + GAP * Math.max(0, rows - 1);
+  const underBarcode = (f.barcodeText ? SMALL_LINE : 0) + (lotUnder ? SMALL_LINE : 0);
+  const fixed = (top ? SMALL_LINE : 0) + (bottom ? (f.price ? PRICE_LINE : SMALL_LINE) : 0) + (barcode ? underBarcode : 0) + GAP * Math.max(0, rows - 1);
   const free = t.heightMm - 2 * PAD - fixed;
   if (!barcode) {
     return { nameFontPt, nameLineMm, nameLines: f.name ? Math.max(1, Math.min(4, Math.floor(free / nameLineMm))) : 0, barcode, barcodeError, crowded: false };
