@@ -4,22 +4,32 @@ import { useEffect, useMemo, useState, useTransition } from "react";
 import { listLayers, type LayerHit, type ProductHit } from "../../search";
 import { ProductSearch } from "@/components/ProductSearch";
 import { saveLabelFields } from "../../settings/printing-actions";
+import { recordGrnLabelsPrinted } from "./actions";
 import { LABEL_FIELDS, fieldsOf, type LabelField, type LabelFields, type LabelFlag } from "@/lib/label-fields";
 import { PAD, labelWarnings, layoutLabel, type LabelLayout, type LabelSize } from "./label-layout";
 
 type Template = { id: string; name: string; widthMm: number; heightMm: number; columns: number; gapMm: number; dpi: number } & Record<LabelFlag, boolean>;
-type Row = { key: string; product: ProductHit; layers: LayerHit[]; lot: string; copies: number; override: Partial<LabelFields> };
+// A row opened from a GRN line remembers how many came in, how many are still in stock and how many labels were printed.
+export type GrnRow = { lineId: string; lot: string; received: number; inStock: number | null; printed: number; product: ProductHit };
+type Row = { key: string; product: ProductHit; layers: LayerHit[]; lot: string; copies: number; override: Partial<LabelFields>; grn?: Omit<GrnRow, "product" | "lot"> };
+type Printed = { lineId: string; qty: number; name: string };
 type LabelData = { name: string; sku: string; code: string; price: string; lot: string };
 
 const SAMPLE: LabelData = { name: "Sample product name that runs long", sku: "SKU-0001", code: "4792024012345", price: "12500", lot: "L-0425" };
 const effective = (job: LabelFields, r: Row): LabelFields => ({ ...job, ...r.override });
 const dataOf = (r: Row): LabelData => ({ name: r.product.name, sku: r.product.sku, code: r.product.barcode || r.product.sku, price: r.product.price, lot: r.lot });
 
-export function LabelPrinter({ templates, business, canManage }: { templates: Template[]; business: string; canManage: boolean }) {
+export function LabelPrinter({ templates, business, canManage, grnRows = [] }: { templates: Template[]; business: string; canManage: boolean; grnRows?: GrnRow[] }) {
   const [templateId, setTemplateId] = useState(templates[0]?.id ?? "");
   const t = templates.find((x) => x.id === templateId) ?? templates[0];
   const [job, setJob] = useState<LabelFields>(() => fieldsOf(t));
-  const [rows, setRows] = useState<Row[]>([]);
+  const [rows, setRows] = useState<Row[]>(() => grnRows.map(({ product, lot, ...grn }) => ({
+    key: grn.lineId, product, layers: [], lot, copies: Math.max(0, grn.received - grn.printed), override: {}, grn,
+  })));
+  // After a full print of GRN rows, staff confirm the labels came out before they are counted as printed.
+  const [toConfirm, setToConfirm] = useState<Printed[] | null>(null);
+  const [confirmMsg, setConfirmMsg] = useState<{ error?: string; ok?: string }>();
+  const [confirming, startConfirming] = useTransition();
   const [previewKey, setPreviewKey] = useState<string | null>(null);
   const [mode, setMode] = useState<"all" | "test" | null>(null);
   const [saved, setSaved] = useState<{ error?: string; ok?: string }>();
@@ -40,6 +50,29 @@ export function LabelPrinter({ templates, business, canManage }: { templates: Te
     const layers = await listLayers(p.id);
     update(key, { layers, lot: layers[0]?.lotCode ?? "" });
   };
+  // GRN rows arrive without their lot list; load it so the lot can still be changed.
+  useEffect(() => {
+    let live = true;
+    for (const { lineId, product } of grnRows) listLayers(product.id).then((layers) => { if (live) update(lineId, { layers }); });
+    return () => { live = false; };
+  }, [grnRows]);
+  const printAll = () => {
+    const grnPrinted = rows.filter((r) => r.grn && r.copies > 0).map((r) => ({ lineId: r.grn!.lineId, qty: Math.min(500, r.copies), name: r.product.name }));
+    setToConfirm(grnPrinted.length ? grnPrinted : null);
+    setConfirmMsg(undefined);
+    setMode("all");
+  };
+  const confirmPrinted = () => startConfirming(async () => {
+    if (!toConfirm) return;
+    const res = await recordGrnLabelsPrinted(toConfirm.map(({ lineId, qty }) => ({ lineId, qty })));
+    if (res.error) return setConfirmMsg({ error: res.error });
+    setRows((rs) => rs.map((r) => {
+      const done = toConfirm.find((x) => x.lineId === r.grn?.lineId);
+      return done && r.grn ? { ...r, grn: { ...r.grn, printed: r.grn.printed + done.qty }, copies: 0 } : r;
+    }));
+    setConfirmMsg({ ok: `${toConfirm.reduce((a, x) => a + x.qty, 0)} label(s) marked as printed.` });
+    setToConfirm(null);
+  });
   const toggleRow = (r: Row, k: LabelField) => {
     const on = !effective(job, r)[k];
     const override = { ...r.override, [k]: on };
@@ -112,7 +145,9 @@ export function LabelPrinter({ templates, business, canManage }: { templates: Te
                 <button type="button" className="label-row-name" onClick={() => setPreviewKey(r.key)} title="Show in preview">{r.product.sku} · {r.product.name}</button>
                 {f.lot && (
                   <select style={{ width: 170 }} value={r.lot} onChange={(e) => update(r.key, { lot: e.target.value })} aria-label="Lot">
-                    <option value="">No lot</option>{r.layers.map((l) => <option key={l.id} value={l.lotCode ?? ""}>{l.lotCode ?? "No lot"} · {Number(l.qtyRemaining)}</option>)}
+                    <option value="">No lot</option>
+                    {r.lot && !r.layers.some((l) => l.lotCode === r.lot) && <option value={r.lot}>{r.lot}</option>}
+                    {r.layers.map((l) => <option key={l.id} value={l.lotCode ?? ""}>{l.lotCode ?? "No lot"} · {Number(l.qtyRemaining)}</option>)}
                   </select>
                 )}
                 <label className="row" style={{ gap: 4 }}><span className="small muted">Copies</span>
@@ -120,6 +155,12 @@ export function LabelPrinter({ templates, business, canManage }: { templates: Te
                 </label>
                 <button type="button" className="btn btn-sm btn-ghost btn-danger" onClick={() => setRows((rs) => rs.filter((x) => x.key !== r.key))}>Remove</button>
               </div>
+              {r.grn && (
+                <div className="small muted">
+                  Received {r.grn.received}{r.grn.inStock != null && <> · in stock {r.grn.inStock}</>} · labels printed {r.grn.printed}
+                  {r.grn.printed >= r.grn.received && <span className="badge badge-muted" style={{ marginLeft: 8 }}>All printed</span>}
+                </div>
+              )}
               <div className="row" style={{ gap: 8 }}>
                 <FieldChips fields={f} changed={r.override} onToggle={(k) => toggleRow(r, k)} small />
                 {Object.keys(r.override).length > 0 && <button type="button" className="btn btn-sm btn-ghost" onClick={() => update(r.key, { override: {} })}>Same as all</button>}
@@ -133,8 +174,18 @@ export function LabelPrinter({ templates, business, canManage }: { templates: Te
           <span className="small muted">{labels.length} label(s). Try one test label first on a new printer or roll.</span>
           <div className="spacer" />
           <button className="btn" disabled={!labels.length || !!mode} onClick={() => setMode("test")}>Print 1 test label</button>
-          <button className="btn btn-primary" disabled={!labels.length || !!mode} onClick={() => setMode("all")}>Print labels</button>
+          <button className="btn btn-primary" disabled={!labels.length || !!mode} onClick={printAll}>Print labels</button>
         </div>
+        {toConfirm && !mode && (
+          <div className="note row" style={{ gap: 8 }}>
+            <span>Did all {toConfirm.reduce((a, x) => a + x.qty, 0)} label(s) print correctly? Only then are they counted on the GRN.</span>
+            <div className="spacer" />
+            <button type="button" className="btn btn-sm" onClick={() => setToConfirm(null)}>No, don&apos;t count</button>
+            <button type="button" className="btn btn-sm btn-primary" disabled={confirming} onClick={confirmPrinted}>{confirming ? "Saving…" : "Yes, mark printed"}</button>
+          </div>
+        )}
+        {confirmMsg?.ok && <p className="small" style={{ color: "var(--ok)", margin: 0 }}>{confirmMsg.ok}</p>}
+        {confirmMsg?.error && <p className="small error-text" style={{ margin: 0 }}>{confirmMsg.error}</p>}
       </section>
 
       {printed.length > 0 && (

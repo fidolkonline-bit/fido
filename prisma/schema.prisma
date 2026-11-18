@@ -474,6 +474,7 @@ model ReceiptLine {
   qtyRejected  Decimal            @default(0) @db.Decimal(14, 4)
   unitCost     Decimal            @db.Decimal(14, 4)
   newSellPrice Decimal?           @db.Decimal(14, 2)
+  labelsPrinted Int             @default(0) // barcode labels printed for this line (staff confirm after printing)
   costLayer    CostLayer?
   devices      DeviceIdentity[]
   poLineId     String?

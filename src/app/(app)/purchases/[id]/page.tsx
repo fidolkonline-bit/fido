@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requirePermission, can } from "@/lib/auth";
 import { db } from "@/lib/db";
@@ -23,7 +24,8 @@ export default async function ReceiptDetail({ params }: { params: Promise<{ id: 
 
   return (
     <div className="stack">
-      <PageHead eyebrow={`Purchases / ${r.location.name}`} title={r.number} actions={<Badge tone="ok">{r.status.toLowerCase()}</Badge>} />
+      <PageHead eyebrow={`Purchases / ${r.location.name}`} title={r.number}
+        actions={<>{can(user, "products.view") && r.lines.some((l) => l.qtyAccepted.gt(0)) && <Link className="btn btn-primary" href={`/products/labels?grn=${r.id}`}>Print barcodes</Link>}<Badge tone="ok">{r.status.toLowerCase()}</Badge></>} />
       <div className="grid3 small">
         <div><span className="muted">Supplier</span><br /><RowLink href={`/contacts/${r.supplierId}`}>{r.supplier.name}</RowLink></div>
         <div><span className="muted">Supplier reference</span><br />{r.supplierRef ?? "—"}{r.purchaseOrder && <> · order <RowLink href={`/purchases/orders/${r.purchaseOrder.id}`}>{r.purchaseOrder.number}</RowLink></>}</div>
@@ -39,6 +41,7 @@ export default async function ReceiptDetail({ params }: { params: Promise<{ id: 
           { label: "Rejected", num: true, render: (l) => qty(l.qtyRejected) },
           { label: "Accepted", num: true, render: (l) => qty(l.qtyAccepted) },
           { label: "Remaining", num: true, render: (l) => (l.costLayer ? qty(l.costLayer.qtyRemaining) : "—") },
+          { label: "Labels printed", num: true, render: (l) => `${l.labelsPrinted} of ${qty(l.qtyAccepted)}` },
           ...(showCost ? [
             { label: "Unit cost", num: true, render: (l: (typeof r.lines)[number]) => money(l.unitCost) },
             { label: "Line total", num: true, render: (l: (typeof r.lines)[number]) => money(D(l.qtyAccepted).mul(l.unitCost)) },
