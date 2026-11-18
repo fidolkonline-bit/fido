@@ -3,7 +3,7 @@
 import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { type ProductHit } from "../search";
-import { submitReceipt, productCostHistory, type CostHistoryRow } from "./actions";
+import { submitReceipt, productCostHistory, previewLot, type CostHistoryRow } from "./actions";
 import { ProductSearch } from "@/components/ProductSearch";
 import { SearchSelect } from "@/components/SearchSelect";
 import { CameraScanner } from "@/components/CameraScan";
@@ -28,7 +28,17 @@ export function ReceiveForm({ suppliers, accounts, order, parcelId = null }: { s
   const [key] = useState(() => crypto.randomUUID());
   const [supplierId, setSupplierId] = useState(order?.supplierId ?? "");
   const [supplierRef, setSupplierRef] = useState("");
-  const supplierCode = suppliers.find((s) => s.id === supplierId)?.supplierCode ?? null;
+  // GRN lot: filled in automatically (supplier code + today, e.g. MTCP-181126) and editable. Left on auto, the
+  // server works it out again when posting, so two GRNs on the same day still get different lots (…-2).
+  const [autoLot, setAutoLot] = useState<string | null>(null);
+  const [lotEdit, setLotEdit] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    setAutoLot(null);
+    if (supplierId) previewLot(supplierId).then((v) => { if (live) setAutoLot(v); });
+    return () => { live = false; };
+  }, [supplierId]);
+  const grnLot = lotEdit ?? autoLot ?? "";
   // Receiving against an order starts from the quantities still due; staff adjust to what actually arrived.
   const [lines, setLines] = useState<Line[]>(() => (order?.lines ?? []).map((l) => ({
     key: l.poLineId, poLineId: l.poLineId, due: l.due, product: l.product, lotCode: "", qtyReceived: String(l.due), qtyRejected: "0",
@@ -57,7 +67,7 @@ export function ReceiveForm({ suppliers, accounts, order, parcelId = null }: { s
     setError(null);
     start(async () => {
       const r = await submitReceipt({
-        idempotencyKey: key, supplierId, supplierRef: supplierRef || null, purchaseOrderId: order?.id ?? null, parcelId,
+        idempotencyKey: key, supplierId, supplierRef: supplierRef || null, lotCode: lotEdit?.trim() || null, purchaseOrderId: order?.id ?? null, parcelId,
         lines: lines.map((l) => ({
           productId: l.product.id, poLineId: l.poLineId ?? null, lotCode: l.lotCode || null, qtyReceived: l.qtyReceived, qtyRejected: l.qtyRejected || 0,
           unitCost: l.unitCost, newSellPrice: l.newSellPrice === "" ? null : l.newSellPrice,
@@ -78,19 +88,24 @@ export function ReceiveForm({ suppliers, accounts, order, parcelId = null }: { s
             disabled={!!order} placeholder="Search supplier…" noneLabel="Select supplier…" />
         </label>
         <label className="field"><span>Supplier invoice / reference</span><input value={supplierRef} onChange={(e) => setSupplierRef(e.target.value)} /></label>
+        <label className="field"><span style={{ display: "flex", alignItems: "center", gap: 8 }}>Lot number
+          {lotEdit === null ? <span className="badge badge-muted">Auto</span>
+            : <button type="button" className="btn btn-sm btn-ghost" style={{ marginLeft: "auto" }} onClick={() => setLotEdit(null)}>Use auto</button>}</span>
+          <input value={grnLot} onChange={(e) => setLotEdit(e.target.value)} placeholder={supplierId ? "Working it out…" : "Select a supplier first"} disabled={!supplierId} />
+        </label>
       </section>
 
       <section className="panel stack">
         <h2 style={{ margin: 0 }}>Items received</h2>
         <ProductSearch onPick={add} />
-        {lines.length === 0 && <p className="muted small" style={{ margin: 0 }}>No items yet. Leave lot number blank to number it from the supplier code (e.g. MTCP-0001); a typed lot number is kept as entered.</p>}
+        {lines.length === 0 && <p className="muted small" style={{ margin: 0 }}>No items yet. Every item takes the lot number above unless you type a different one on the item.</p>}
         {lines.map((l) => {
           const accepted = n(l.qtyReceived) - n(l.qtyRejected);
           return (
             <div key={l.key} style={{ borderTop: "1px solid var(--rule)", paddingTop: 12 }} className="stack">
               <div className="row"><strong>{l.product.sku} · {l.product.name}</strong>{l.poLineId && <span className="badge badge-muted">{l.due} due on {order?.number}</span>}<div className="spacer" /><button type="button" className="btn btn-sm btn-ghost btn-danger" onClick={() => setLines((ls) => ls.filter((x) => x.key !== l.key))}>Remove</button></div>
               <div className="grid3">
-                <label className="field"><span>Lot number</span><input value={l.lotCode} onChange={(e) => update(l.key, { lotCode: e.target.value })} placeholder={supplierCode ? `Auto: ${supplierCode}-…` : ""} /></label>
+                <label className="field"><span>Lot number (if different)</span><input value={l.lotCode} onChange={(e) => update(l.key, { lotCode: e.target.value })} placeholder={grnLot || ""} /></label>
                 <label className="field"><span>Qty received</span><input type="number" min="0" step="any" inputMode="decimal" value={l.qtyReceived} onChange={(e) => update(l.key, { qtyReceived: e.target.value })} /></label>
                 <label className="field"><span>Rejected / damaged</span><input type="number" min="0" step="any" inputMode="decimal" value={l.qtyRejected} onChange={(e) => update(l.key, { qtyRejected: e.target.value })} /></label>
                 <label className="field"><span>Unit cost</span><input type="number" min="0" step="0.0001" inputMode="decimal" value={l.unitCost} onChange={(e) => update(l.key, { unitCost: e.target.value })} /></label>

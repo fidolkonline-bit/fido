@@ -297,9 +297,8 @@ model Contact {
   code           String?        @unique
   isCustomer     Boolean        @default(true)
   isSupplier     Boolean        @default(false)
-  // Short supplier code (e.g. MTCP for Multi Trade Center Peta). GRN lot numbers are built from it: MTCP-0001, MTCP-0002…
+  // Short supplier code (e.g. MTCP for Multi Trade Center Peta). GRN lots are built from it and the date: MTCP-181126.
   supplierCode   String?        @unique
-  lotSeq         Int            @default(0) // last lot number issued from supplierCode
   name           String
   company        String?
   phone          String?

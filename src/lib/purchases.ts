@@ -2,9 +2,10 @@ import "server-only";
 import { z } from "zod";
 import { imeiProblem } from "./imei";
 import { lockImeis } from "./stock";
-import { posting } from "./db";
+import { posting, type Tx } from "./db";
 import { D, ZERO } from "./money";
 import { nextNumber } from "./numbering";
+import { lotDate, lotPrefix, nextLot } from "./lots";
 import type { CurrentUser } from "./auth";
 
 export const receiptInput = z.object({
@@ -13,6 +14,8 @@ export const receiptInput = z.object({
   supplierRef: z.string().max(80).nullable().default(null),
   purchaseOrderId: z.string().nullable().default(null),
   parcelId: z.string().nullable().default(null),
+  // Lot for the whole GRN. Blank = auto (supplier code + date). Lines with their own lot number keep it.
+  lotCode: z.string().trim().max(60).nullable().default(null),
   notes: z.string().max(500).nullable().default(null),
   lines: z
     .array(
@@ -117,16 +120,10 @@ export async function postReceipt(user: CurrentUser, raw: unknown) {
       if (clash) throw new ReceiptError(`IMEI ${imeis.find((i) => i === clash.imei1 || i === clash.imei2)} is already in stock.`);
     }
 
-    // Lines received without a lot number share one lot built from the supplier code (MTCP-0001, MTCP-0002…),
-    // so the lot shown at sale tells staff which supplier the stock came from. Typed lot numbers are kept as entered.
-    let autoLot: string | null = null;
-    if (lines.some((l) => !l.lotCode?.trim())) {
-      const [s] = await tx.$queryRaw<{ supplierCode: string | null; lotSeq: number }[]>`
-        UPDATE "Contact" SET "lotSeq" = "lotSeq" + 1 WHERE id = ${input.supplierId} AND "supplierCode" IS NOT NULL
-        RETURNING "supplierCode", "lotSeq"`;
-      if (s?.supplierCode) autoLot = `${s.supplierCode}-${String(s.lotSeq).padStart(4, "0")}`;
-    }
-    for (const l of lines) l.lotCode = l.lotCode?.trim() || autoLot;
+    // One lot for the GRN: as typed, or auto from the supplier code and today's date (MTCP-181126), so the lot shown
+    // at sale tells staff the supplier and the day the stock came in. A line with its own lot number keeps it.
+    const grnLot = input.lotCode || (await autoLotCode(tx, input.supplierId, new Date(), true));
+    for (const l of lines) l.lotCode = l.lotCode?.trim() || grnLot;
 
     const number = await nextNumber(tx, "GRN");
     const receivedAt = new Date();
@@ -205,6 +202,16 @@ export async function postReceipt(user: CurrentUser, raw: unknown) {
     });
     return { id: receipt.id, number };
   });
+}
+
+// The lot a GRN from this supplier would get now. `lock` holds the supplier row so two GRNs posted at once
+// cannot take the same lot; without it the result is only a preview for the form.
+export async function autoLotCode(tx: Tx, supplierId: string, at: Date, lock = false) {
+  if (lock) await tx.$queryRaw`SELECT id FROM "Contact" WHERE id = ${supplierId} FOR UPDATE`;
+  const supplier = await tx.contact.findUniqueOrThrow({ where: { id: supplierId }, select: { supplierCode: true, name: true } });
+  const base = `${lotPrefix(supplier)}-${lotDate(at)}`;
+  const used = await tx.receiptLine.findMany({ where: { lotCode: { startsWith: base } }, select: { lotCode: true }, distinct: ["lotCode"] });
+  return nextLot(base, used.map((u) => u.lotCode));
 }
 
 // ───────────── Purchase orders ─────────────

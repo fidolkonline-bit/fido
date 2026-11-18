@@ -4,6 +4,7 @@ import { useActionState, useState } from "react";
 import Link from "next/link";
 import { saveContact } from "./actions";
 import { SubmitButton } from "@/components/SubmitButton";
+import { nameInitials } from "@/lib/lots";
 
 type C = {
   id: string; name: string; company: string | null; phone: string | null; email: string | null; address: string | null;
@@ -15,6 +16,7 @@ export function ContactForm({ contact, groups, defaultType }: { contact?: C; gro
   const [state, action] = useActionState(saveContact, undefined);
   const c = contact;
   const [isSupplier, setIsSupplier] = useState(c ? c.isSupplier : defaultType === "supplier");
+  const [name, setName] = useState(c?.name ?? "");
   return (
     <form action={action} className="panel stack">
       {c && <input type="hidden" name="id" value={c.id} />}
@@ -24,12 +26,12 @@ export function ContactForm({ contact, groups, defaultType }: { contact?: C; gro
       </div>
       {isSupplier && (
         <label className="field" style={{ maxWidth: 320 }}><span>Supplier code (for lot numbers)</span>
-          <input name="supplierCode" defaultValue={c?.supplierCode ?? ""} maxLength={10} autoCapitalize="characters" placeholder="e.g. MTCP" style={{ textTransform: "uppercase" }} />
-          <small className="muted">Letters and numbers, 2–10. Lots left blank on a GRN are numbered from it: MTCP-0001, MTCP-0002…</small>
+          <input name="supplierCode" defaultValue={c?.supplierCode ?? ""} maxLength={10} autoCapitalize="characters" placeholder={name.trim() ? `e.g. ${nameInitials(name)}` : "e.g. MTCP"} style={{ textTransform: "uppercase" }} />
+          <small className="muted">Letters and numbers, 2–10. GRN lots are this code plus the date received, e.g. MTCP-181126 (18 Nov 2026).</small>
         </label>
       )}
       <div className="grid2">
-        <label className="field"><span>Name *</span><input name="name" defaultValue={c?.name} required /></label>
+        <label className="field"><span>Name *</span><input name="name" value={name} onChange={(e) => setName(e.target.value)} required /></label>
         <label className="field"><span>Mobile</span><input name="phone" type="tel" inputMode="tel" defaultValue={c?.phone ?? ""} /></label>
         <label className="field"><span>Company</span><input name="company" defaultValue={c?.company ?? ""} /></label>
         <label className="field"><span>Email</span><input name="email" type="email" defaultValue={c?.email ?? ""} /></label>

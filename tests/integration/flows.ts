@@ -10,7 +10,8 @@ import { createPlan, planProgress } from "../../src/lib/instalments";
 import { pointsBalance, redeemPoints } from "../../src/lib/loyalty";
 import { createRepair, changeStatus, setCharges, setRoute, sendOutside, returnFromOutside, refundRepair } from "../../src/lib/repairs";
 import { postReturn } from "../../src/lib/returns";
-import { postReceipt } from "../../src/lib/purchases";
+import { postReceipt, autoLotCode } from "../../src/lib/purchases";
+import { lotDate, nameInitials, nextLot } from "../../src/lib/lots";
 import { availability, storeCreditBalance } from "../../src/lib/stock";
 import { loginLocked, recordLoginAttempt } from "../../src/lib/login-guard";
 import type { CurrentUser } from "../../src/lib/auth";
@@ -269,22 +270,28 @@ async function main() {
     assert.equal(next.expectedOpening?.toFixed(2), "5000.00");
   });
 
-  await step("GRN lot numbers come from the supplier code; typed lots are kept", async () => {
-    const sup = await db.contact.create({ data: { name: `Multi Trade Center Peta ${randomUUID().slice(0, 4)}`, isSupplier: true, isCustomer: false, supplierCode: `MT${randomUUID().slice(0, 4).toUpperCase()}` } });
-    const grn = (lots: (string | null)[]) => postReceipt(owner, { idempotencyKey: randomUUID(), supplierId: sup.id, lines: lots.map((lotCode) => ({ productId: cover.id, lotCode, qtyReceived: 1, unitCost: 500 })) });
-    const lotsOf = async (id: string) => (await db.receiptLine.findMany({ where: { receiptId: id }, orderBy: { id: "asc" } })).map((l) => l.lotCode).sort();
-    const a = await grn([null, null]);
-    assert.deepEqual(await lotsOf(a.id), [`${sup.supplierCode}-0001`, `${sup.supplierCode}-0001`]);   // one lot per GRN
-    const b = await grn([" BOX-7 ", ""]);
-    assert.deepEqual(await lotsOf(b.id), ["BOX-7", `${sup.supplierCode}-0002`]);
-    const layer = await db.costLayer.findFirstOrThrow({ where: { receiptLine: { receiptId: b.id }, lotCode: `${sup.supplierCode}-0002` } });
-    assert.ok(layer);                                                                             // the lot staff see at sale
-    const c = await grn(["OWN-1"]);                                                                // nothing blank: no number used
-    assert.deepEqual(await lotsOf(c.id), ["OWN-1"]);
-    assert.equal((await db.contact.findUniqueOrThrow({ where: { id: sup.id } })).lotSeq, 2);
-    const plain = await db.contact.create({ data: { name: `No code ${randomUUID().slice(0, 4)}`, isSupplier: true, isCustomer: false } });
-    const d = await postReceipt(owner, { idempotencyKey: randomUUID(), supplierId: plain.id, lines: [{ productId: cover.id, lotCode: null, qtyReceived: 1, unitCost: 500 }] });
-    assert.deepEqual(await lotsOf(d.id), [null]);                                                  // no code: lot stays blank
+  await step("GRN lot is supplier code + date by default, -2 on the same day; typed lots are kept", async () => {
+    const code = `MT${randomUUID().slice(0, 4).toUpperCase()}`;
+    const sup = await db.contact.create({ data: { name: `Multi Trade Center Peta ${code}`, isSupplier: true, isCustomer: false, supplierCode: code } });
+    const grn = (lots: (string | null)[], lotCode: string | null = null, supplierId = sup.id) =>
+      postReceipt(owner, { idempotencyKey: randomUUID(), supplierId, lotCode, lines: lots.map((l) => ({ productId: cover.id, lotCode: l, qtyReceived: 1, unitCost: 500 })) });
+    const lotsOf = async (id: string) => (await db.receiptLine.findMany({ where: { receiptId: id } })).map((l) => l.lotCode).sort();
+    const day = lotDate(new Date());
+    assert.match(day, /^\d{6}$/);
+    assert.equal(await autoLotCode(db, sup.id, new Date()), `${code}-${day}`);                 // what the form shows
+    const a = await grn([null, ""]);
+    assert.deepEqual(await lotsOf(a.id), [`${code}-${day}`, `${code}-${day}`]);                // one lot per GRN
+    const b = await grn([" BOX-7 ", null]);                                                     // same day: -2
+    assert.deepEqual(await lotsOf(b.id), ["BOX-7", `${code}-${day}-2`]);
+    assert.ok(await db.costLayer.findFirst({ where: { receiptLine: { receiptId: b.id }, lotCode: `${code}-${day}-2` } }));
+    const c = await grn([null], " MY-LOT ");                                                    // GRN lot typed by hand
+    assert.deepEqual(await lotsOf(c.id), ["MY-LOT"]);
+    assert.equal(await autoLotCode(db, sup.id, new Date()), `${code}-${day}-3`);
+    const plain = await db.contact.create({ data: { name: `Zeta Yellow ${code}`, isSupplier: true, isCustomer: false } });
+    const d = await grn([null], null, plain.id);                                                // no code: initials
+    assert.deepEqual(await lotsOf(d.id), [`ZYM-${day}`]);
+    assert.equal(nameInitials("Multi Trade Center Peta"), "MTCP");
+    assert.equal(nextLot("X-181126", ["X-181126", "X-181126-2", "X-181126-B", "X-1811260"]), "X-181126-3");
   });
 
   await step("login lock after 5 wrong tries, cleared by a good one", async () => {

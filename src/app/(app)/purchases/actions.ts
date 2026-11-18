@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { requirePermission, can } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { postReceipt } from "@/lib/purchases";
+import { postReceipt, autoLotCode } from "@/lib/purchases";
 import { formError } from "@/lib/forms";
 
 export async function submitReceipt(payload: unknown): Promise<{ id?: string; number?: string; error?: string }> {
@@ -16,6 +16,13 @@ export async function submitReceipt(payload: unknown): Promise<{ id?: string; nu
   } catch (e) {
     return formError(e) ?? {};
   }
+}
+
+// What the GRN lot will be if staff leave it on auto (shown, editable, on the receive form).
+export async function previewLot(supplierId: string): Promise<string | null> {
+  await requirePermission("purchases.post");
+  if (!supplierId) return null;
+  return autoLotCode(db, supplierId, new Date()).catch(() => null);
 }
 
 export type CostHistoryRow = { at: string; number: string; supplier: string; qty: string; unitCost: string; newSellPrice: string | null };
