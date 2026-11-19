@@ -15,7 +15,8 @@ import { lotDate, nameInitials, nextLot } from "../../src/lib/lots";
 import { availability, storeCreditBalance } from "../../src/lib/stock";
 import { loginLocked, recordLoginAttempt } from "../../src/lib/login-guard";
 import type { CurrentUser } from "../../src/lib/auth";
-import { attendance, clockInOnSignIn, todayYmd } from "../../src/lib/hr";
+import { attendance, clockInOnSignIn, dayStart, todayYmd, ymd } from "../../src/lib/hr";
+import { nightlyAttendance } from "../../src/lib/attendance-night";
 import { dayReport, endDay } from "../../src/lib/day-end";
 import { DENOMINATIONS, closeRegister, drawerSummary, openRegister, recordMovement } from "../../src/lib/register";
 
@@ -370,6 +371,49 @@ async function main() {
     assert.equal(await db.auditEvent.count({ where: { action: "DAY_ENDED", actorId: { in: [a.u.personId, b.u.personId] } } }), 3);
     const [dayA] = await attendance(a.emp.id, todayYmd(), todayYmd());
     assert.ok(dayA.firstIn && dayA.lastOut);
+  });
+
+  await step("nightly job: forgotten clock-out set to the shift end and flagged; open drawer reported once", async () => {
+    const shift = await db.shift.create({ data: { name: `Night test ${randomUUID().slice(0, 6)}`, startTime: "09:00", endTime: "18:00", restDays: [] } });
+    const mk2 = async (n: string, shiftId: string | null) => {
+      const person = await db.person.create({ data: { fullName: `${n} ${randomUUID().slice(0, 6)}` } });
+      return db.employeeProfile.create({ data: { personId: person.id, joinedOn: new Date("2026-01-01"), shiftId } });
+    };
+    const withShift = await mk2("Chamara", shift.id);
+    const noShift = await mk2("Dilini", null);
+    // Two business days ago, 08:55 Colombo: always before the last nightly cutoff.
+    const twoDaysAgo = ymd(new Date(Date.now() - 2 * 86_400_000));
+    const inAt = new Date(dayStart(twoDaysAgo).getTime() + (8 * 60 + 55) * 60_000);
+    for (const e of [withShift, noShift]) await db.clockEvent.create({ data: { employeeId: e.id, kind: "IN", at: inAt, source: "LOGIN", locationId: loc.id } });
+
+    const old = new Date(dayStart(twoDaysAgo).getTime() + 8 * 3_600_000);
+    const open = await db.registerSession.findFirst({ where: { locationId: loc.id, closedAt: null } });
+    const reg = open ?? await db.registerSession.create({ data: { locationId: loc.id, userId: acct.personId, openingCash: 1000, openedAt: old } });
+    if (open) await db.registerSession.update({ where: { id: open.id }, data: { openedAt: old } });
+
+    const first = await nightlyAttendance();
+    assert.ok(first.autoClockOuts >= 2);
+    assert.equal(first.drawerAlerts, 1);
+    const outShift = await db.clockEvent.findFirstOrThrow({ where: { employeeId: withShift.id, kind: "OUT" } });
+    assert.equal(outShift.source, "AUTO");
+    assert.equal(outShift.at.getTime(), dayStart(twoDaysAgo).getTime() + 18 * 3_600_000, "set to the shift end");
+    const outNoShift = await db.clockEvent.findFirstOrThrow({ where: { employeeId: noShift.id, kind: "OUT" } });
+    assert.equal(outNoShift.at.getTime(), inAt.getTime(), "no shift: no hours assumed");
+    const [d] = await attendance(withShift.id, twoDaysAgo, twoDaysAgo);
+    assert.equal(d.autoOut, true);
+    assert.equal(d.missingOut, false);
+    assert.equal(d.leftEarly, false);
+    assert.equal(d.minutes, 9 * 60 + 5);
+
+    const again = await nightlyAttendance();
+    assert.equal(again.drawerAlerts, 0, "one alert per drawer");
+    assert.equal(await db.clockEvent.count({ where: { employeeId: { in: [withShift.id, noShift.id] }, kind: "OUT" } }), 2, "safe to repeat");
+    // Someone clocked in after the last cutoff is left alone.
+    const fresh = await mk2("Eranga", shift.id);
+    await db.clockEvent.create({ data: { employeeId: fresh.id, kind: "IN", at: new Date(Date.now() - 60_000), source: "LOGIN", locationId: loc.id } });
+    await nightlyAttendance();
+    assert.equal(await db.clockEvent.count({ where: { employeeId: fresh.id, kind: "OUT" } }), 0);
+    await db.registerSession.update({ where: { id: reg.id }, data: { closedAt: new Date() } });
   });
 
   console.log("\nAll integration flows passed.");

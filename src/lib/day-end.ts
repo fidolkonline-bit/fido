@@ -6,6 +6,7 @@ import type { CurrentUser } from "./auth";
 import { getAttendanceSettings } from "./shop-device";
 import { attendance, dayStart, shiftEndFor, stillClockedIn, ymd } from "./hr";
 import { drawerSummary } from "./register";
+import { alertDrawerOpen } from "./attendance-night";
 
 export class DayEndError extends Error {}
 
@@ -95,5 +96,6 @@ export async function endDay(user: CurrentUser, ip: string | null) {
       },
     },
   });
+  if (r.mustClose && r.drawer) await alertDrawerOpen(r.drawer.id, `${user.name} ended the day as the last one on the clock and could not close it.`);
   return { clockOut };
 }

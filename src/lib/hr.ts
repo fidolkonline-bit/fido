@@ -229,7 +229,9 @@ export function shiftEndFor(shift: { startTime: string; endTime: string }, clock
 
 export type DayAttendance = {
   day: string; working: boolean; holiday: string | null; restDay: boolean; firstIn: Date | null; lastOut: Date | null;
-  minutes: number; late: boolean; leftEarly: boolean; missingOut: boolean; leave: string | null; leavePaid: boolean | null; leaveDays: number; absent: boolean;
+  minutes: number; late: boolean; leftEarly: boolean; missingOut: boolean;
+  autoOut: boolean; // closed by the nightly job, not by the person: a review item
+  leave: string | null; leavePaid: boolean | null; leaveDays: number; absent: boolean;
   offDayWork: boolean; // clocked in on a rest day or holiday: a review item, paid only if a rule is set up
 };
 
@@ -241,12 +243,12 @@ export async function attendance(employeeId: string, start: string, end: string)
     db.clockEvent.findMany({ where: { employeeId, voidedAt: null, at: { gte: dayStart(start), lt: new Date(dayStart(end).getTime() + 86_400_000 + 12 * 3_600_000) } }, orderBy: { at: "asc" } }),
     db.leaveRequest.findMany({ where: { employeeId, status: "APPROVED", startDate: { lte: dateOnly(end) }, endDate: { gte: dateOnly(start) } }, include: { leaveType: true } }),
   ]);
-  const byDay = new Map<string, { ins: Date[]; minutes: number; open: Date | null; lastOut: Date | null }>();
+  const byDay = new Map<string, { ins: Date[]; minutes: number; open: Date | null; lastOut: Date | null; autoOut: boolean }>();
   let open: { day: string; at: Date } | null = null;
   for (const e of events) {
     if (e.kind === "IN") {
       const day = ymd(e.at);
-      const rec = byDay.get(day) ?? { ins: [], minutes: 0, open: null, lastOut: null };
+      const rec = byDay.get(day) ?? { ins: [], minutes: 0, open: null, lastOut: null, autoOut: false };
       rec.ins.push(e.at);
       byDay.set(day, rec);
       open = { day, at: e.at };
@@ -254,6 +256,7 @@ export async function attendance(employeeId: string, start: string, end: string)
       const rec = byDay.get(open.day)!;
       rec.minutes += Math.round((e.at.getTime() - open.at.getTime()) / 60_000);
       rec.lastOut = e.at;
+      rec.autoOut = e.source === "AUTO";
       open = null;
     }
   }
@@ -266,10 +269,10 @@ export async function attendance(employeeId: string, start: string, end: string)
     const firstIn = rec?.ins[0] ?? null;
     const late = !!firstIn && c.working && firstIn.getTime() > dayStart(c.day).getTime() + ((sh * 60 + sm + grace) * 60_000);
     const missingOut = !!rec && !rec.lastOut && c.day < nowYmd;
-    const leftEarly = !!firstIn && !!rec?.lastOut && c.working && !!emp.shift && rec.lastOut.getTime() < shiftEndFor(emp.shift, firstIn).getTime() - grace * 60_000;
+    const leftEarly = !!firstIn && !!rec?.lastOut && !rec.autoOut && c.working && !!emp.shift && rec.lastOut.getTime() < shiftEndFor(emp.shift, firstIn).getTime() - grace * 60_000;
     const leaveDays = lv ? (lv.halfDay ? 0.5 : 1) : 0;
     return {
-      ...c, firstIn, lastOut: rec?.lastOut ?? null, minutes: rec?.minutes ?? 0, late, leftEarly, missingOut,
+      ...c, firstIn, lastOut: rec?.lastOut ?? null, minutes: rec?.minutes ?? 0, late, leftEarly, missingOut, autoOut: !!rec?.autoOut,
       leave: lv?.leaveType.name ?? null, leavePaid: lv ? lv.leaveType.paid : null, leaveDays,
       absent: c.working && !rec && !lv && c.day < nowYmd,
       offDayWork: !c.working && !!rec,

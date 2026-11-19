@@ -55,9 +55,9 @@ export default async function Me() {
           columns={[
             { label: "Date", render: (d) => fmtDate(H.dateOnly(d.day)) },
             { label: "In", render: (d) => time(d.firstIn) },
-            { label: "Out", render: (d) => time(d.lastOut) },
+            { label: "Out", render: (d) => <>{time(d.lastOut)}{d.autoOut && <span className="small muted"> (auto)</span>}</> },
             { label: "Hours", num: true, render: (d) => (d.minutes ? `${Math.floor(d.minutes / 60)}h ${String(d.minutes % 60).padStart(2, "0")}` : "") },
-            { label: "", render: (d) => d.offDayWork ? <Badge tone="warn">Worked on {d.holiday ? "holiday" : "rest day"}</Badge> : d.holiday ? <Badge>{d.holiday}</Badge> : d.restDay ? <span className="muted small">Rest day</span> : d.leave ? <Badge tone="ok">{d.leave}</Badge> : d.missingOut ? <Badge tone="err">No clock-out</Badge> : d.late ? <Badge tone="warn">Late</Badge> : d.absent ? <Badge tone="err">Absent</Badge> : null },
+            { label: "", render: (d) => d.offDayWork ? <Badge tone="warn">Worked on {d.holiday ? "holiday" : "rest day"}</Badge> : d.holiday ? <Badge>{d.holiday}</Badge> : d.restDay ? <span className="muted small">Rest day</span> : d.leave ? <Badge tone="ok">{d.leave}</Badge> : d.missingOut ? <Badge tone="err">No clock-out</Badge> : d.autoOut ? <Badge tone="err">Forgot End my day</Badge> : d.late || d.leftEarly ? <Badge tone="warn">{[d.late && "Late", d.leftEarly && "Left early"].filter(Boolean).join(" · ")}</Badge> : d.absent ? <Badge tone="err">Absent</Badge> : null },
           ]} />
       </section>
 
