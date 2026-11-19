@@ -13,6 +13,7 @@ const time = (d: Date | null) => (d ? d.toLocaleTimeString("en-GB", { timeZone: 
 type Ev = { device: { name: string } | null; correctedBy: { fullName: string } | null };
 const SOURCE: Record<string, (e: Ev) => string> = {
   LOGIN: (e) => `Sign-in on ${e.device?.name ?? "shop device"}`,
+  LOGOUT: (e) => `End my day on ${e.device?.name ?? "this device"}`,
   SELF: (e) => (e.device ? `Clock button on ${e.device.name}` : "Clock button"),
   MANUAL: (e) => `Manual — ${e.correctedBy?.fullName ?? ""}`,
   IMPORT: () => "Import",
@@ -36,7 +37,7 @@ export default async function Attendance({ searchParams }: { searchParams: Promi
           { label: "In", render: (r) => time(r.a.firstIn) },
           { label: "Out", render: (r) => time(r.a.lastOut) },
           { label: "Hours", num: true, render: (r) => (r.a.minutes ? `${Math.floor(r.a.minutes / 60)}h ${String(r.a.minutes % 60).padStart(2, "0")}` : "") },
-          { label: "Status", render: (r) => r.a.offDayWork ? <Badge tone="warn">Worked on {r.a.holiday ? "holiday" : "rest day"}</Badge> : r.a.holiday ? <Badge>{r.a.holiday}</Badge> : r.a.restDay ? <Badge tone="muted">Rest day</Badge> : r.a.leave ? <Badge tone="ok">{r.a.leave}</Badge> : r.a.missingOut ? <Badge tone="err">No clock-out</Badge> : r.a.late ? <Badge tone="warn">Late</Badge> : r.a.absent ? <Badge tone="err">Absent</Badge> : r.a.firstIn ? <Badge tone="ok">Present</Badge> : <span className="muted small">Not in yet</span> },
+          { label: "Status", render: (r) => r.a.offDayWork ? <Badge tone="warn">Worked on {r.a.holiday ? "holiday" : "rest day"}</Badge> : r.a.holiday ? <Badge>{r.a.holiday}</Badge> : r.a.restDay ? <Badge tone="muted">Rest day</Badge> : r.a.leave ? <Badge tone="ok">{r.a.leave}</Badge> : r.a.missingOut ? <Badge tone="err">No clock-out</Badge> : r.a.late || r.a.leftEarly ? <Badge tone="warn">{[r.a.late && "Late", r.a.leftEarly && "Left early"].filter(Boolean).join(" · ")}</Badge> : r.a.absent ? <Badge tone="err">Absent</Badge> : r.a.firstIn ? <Badge tone="ok">Present</Badge> : <span className="muted small">Not in yet</span> },
         ]} />
       <p className="small muted" style={{ margin: 0 }}>Late, absent and missing clock-outs are flags for review. They do not reduce pay unless a pay rule is set up.</p>
 

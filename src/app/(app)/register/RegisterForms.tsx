@@ -60,8 +60,8 @@ export function CashMoveForm({ reasons }: { reasons: { value: string; label: str
   );
 }
 
-export function CloseRegisterForm({ registerId, expected, denominations, varianceReasons }: {
-  registerId: string; expected: number; denominations: number[]; varianceReasons: { value: string; label: string }[];
+export function CloseRegisterForm({ registerId, expected, denominations, varianceReasons, returnTo }: {
+  registerId: string; expected: number; denominations: number[]; varianceReasons: { value: string; label: string }[]; returnTo?: "/end";
 }) {
   const [state, action] = useActionState(closeRegister, undefined);
   const [counts, setCounts] = useState<Record<number, string>>({});
@@ -73,6 +73,7 @@ export function CloseRegisterForm({ registerId, expected, denominations, varianc
   return (
     <form action={action} className="panel stack" id="close">
       <input type="hidden" name="registerId" value={registerId} />
+      {returnTo && <input type="hidden" name="returnTo" value={returnTo} />}
       <h2 style={{ margin: 0 }}>Count cash and close</h2>
       <p className="small muted" style={{ margin: 0 }}>Count every note and coin in the drawer.</p>
       <div className="grid3" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: 10 }}>

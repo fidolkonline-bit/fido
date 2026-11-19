@@ -24,6 +24,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         locations={user.locations.map((l) => ({ id: l.id, name: l.name }))}
         locationId={user.location?.id ?? null}
         registerOpen={registerOpen}
+        shopDevice={!!user.device}
         theme={t === "light" || t === "dark" ? t : "system"}
         vapidKey={pushPublicKey()}
       >

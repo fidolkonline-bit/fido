@@ -23,6 +23,8 @@ export const attendanceSchema = z.object({
   dayCutoff: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Use a time like 02:00.").default("02:00"),
   // Signing in on a shop device clocks an employee in.
   autoClockIn: z.boolean().default(true),
+  // The last person on the clock at a shop must count and close the drawer before ending their day.
+  requireDrawerClose: z.boolean().default(true),
 });
 export type AttendanceSettings = z.infer<typeof attendanceSchema>;
 

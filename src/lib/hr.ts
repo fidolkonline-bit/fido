@@ -219,9 +219,17 @@ export async function voidClock(user: CurrentUser, id: string, reason: string) {
   await db.clockEvent.update({ where: { id }, data: { voidedAt: new Date(), voidReason: reason, correctedById: user.personId } });
 }
 
+// The shift end that belongs to a clock-in: the same business day, or the next one for an overnight shift.
+export function shiftEndFor(shift: { startTime: string; endTime: string }, clockIn: Date) {
+  const [sh, sm] = shift.startTime.split(":").map(Number);
+  const [eh, em] = shift.endTime.split(":").map(Number);
+  const overnight = eh * 60 + em <= sh * 60 + sm;
+  return new Date(dayStart(ymd(clockIn)).getTime() + ((overnight ? 24 * 60 : 0) + eh * 60 + em) * 60_000);
+}
+
 export type DayAttendance = {
   day: string; working: boolean; holiday: string | null; restDay: boolean; firstIn: Date | null; lastOut: Date | null;
-  minutes: number; late: boolean; missingOut: boolean; leave: string | null; leavePaid: boolean | null; leaveDays: number; absent: boolean;
+  minutes: number; late: boolean; leftEarly: boolean; missingOut: boolean; leave: string | null; leavePaid: boolean | null; leaveDays: number; absent: boolean;
   offDayWork: boolean; // clocked in on a rest day or holiday: a review item, paid only if a rule is set up
 };
 
@@ -258,9 +266,10 @@ export async function attendance(employeeId: string, start: string, end: string)
     const firstIn = rec?.ins[0] ?? null;
     const late = !!firstIn && c.working && firstIn.getTime() > dayStart(c.day).getTime() + ((sh * 60 + sm + grace) * 60_000);
     const missingOut = !!rec && !rec.lastOut && c.day < nowYmd;
+    const leftEarly = !!firstIn && !!rec?.lastOut && c.working && !!emp.shift && rec.lastOut.getTime() < shiftEndFor(emp.shift, firstIn).getTime() - grace * 60_000;
     const leaveDays = lv ? (lv.halfDay ? 0.5 : 1) : 0;
     return {
-      ...c, firstIn, lastOut: rec?.lastOut ?? null, minutes: rec?.minutes ?? 0, late, missingOut,
+      ...c, firstIn, lastOut: rec?.lastOut ?? null, minutes: rec?.minutes ?? 0, late, leftEarly, missingOut,
       leave: lv?.leaveType.name ?? null, leavePaid: lv ? lv.leaveType.paid : null, leaveDays,
       absent: c.working && !rec && !lv && c.day < nowYmd,
       offDayWork: !c.working && !!rec,

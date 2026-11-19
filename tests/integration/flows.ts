@@ -15,7 +15,8 @@ import { lotDate, nameInitials, nextLot } from "../../src/lib/lots";
 import { availability, storeCreditBalance } from "../../src/lib/stock";
 import { loginLocked, recordLoginAttempt } from "../../src/lib/login-guard";
 import type { CurrentUser } from "../../src/lib/auth";
-import { clockInOnSignIn } from "../../src/lib/hr";
+import { attendance, clockInOnSignIn, todayYmd } from "../../src/lib/hr";
+import { dayReport, endDay } from "../../src/lib/day-end";
 import { DENOMINATIONS, closeRegister, drawerSummary, openRegister, recordMovement } from "../../src/lib/register";
 
 if (!/127\.0\.0\.1|localhost/.test(process.env.DATABASE_URL ?? "")) throw new Error("Refusing to run: DATABASE_URL is not a local database.");
@@ -328,6 +329,47 @@ async function main() {
     await db.appSetting.delete({ where: { key: "attendance" } });
     // No employee profile (the owner): nothing recorded.
     assert.equal(await clockInOnSignIn({ personId: acct.personId, sessionId: "s7", deviceId: device.id, locationId: loc.id, ip: null }), null);
+  });
+
+  await step("end of day: others still on the clock leave the drawer open; the last one must close it; one clock-out", async () => {
+    const device = await db.shopDevice.create({ data: { name: "End till", locationId: loc.id, tokenHash: randomUUID(), registeredById: acct.personId } });
+    const staff = await Promise.all(["Asha", "Bimal"].map(async (n) => {
+      const person = await db.person.create({ data: { fullName: `${n} ${randomUUID().slice(0, 6)}` } });
+      const emp = await db.employeeProfile.create({ data: { personId: person.id, joinedOn: new Date("2026-01-01") } });
+      await clockInOnSignIn({ personId: person.id, sessionId: `in-${n}`, deviceId: device.id, locationId: loc.id, ip: null });
+      const u: CurrentUser = { ...owner, personId: person.id, name: person.fullName, sessionId: `end-${n}`, permissions: new Set(["register.operate"]), device: { id: device.id, name: device.name, locationId: loc.id } };
+      return { emp, u };
+    }));
+    const [a, b] = staff;
+    if (!(await db.registerSession.findFirst({ where: { locationId: loc.id, closedAt: null } })))
+      await db.registerSession.create({ data: { locationId: loc.id, userId: acct.personId, openingCash: 1000 } });
+
+    const ra = await dayReport(a.u);
+    assert.equal(ra.mustClose, false);
+    assert.ok(ra.others.some((o) => o.personId === b.u.personId));
+    const outA = await endDay(a.u, "10.0.0.8");
+    assert.equal(outA.clockOut?.source, "LOGOUT");
+    assert.equal(outA.clockOut?.deviceId, device.id);
+    assert.equal((await endDay(a.u, null)).clockOut, null, "a second end of day adds no clock-out");
+
+    assert.equal((await dayReport(b.u)).mustClose, true);
+    await fails(() => endDay(b.u, null), /last one on the clock/);
+    // Someone who cannot close the drawer may still leave; the audit notes the open drawer.
+    const noPerm = { ...b.u, permissions: new Set<string>() };
+    assert.equal((await dayReport(noPerm)).canClose, false);
+
+    const open = await db.registerSession.findFirstOrThrow({ where: { locationId: loc.id, closedAt: null } });
+    const { expected } = await drawerSummary(db, open.id);
+    const counts: Record<string, number> = {};
+    let rest = Math.round(Number(expected));
+    for (const d of [...DENOMINATIONS].sort((x, y) => y - x)) { const c = Math.floor(rest / d); if (c) { counts[d] = c; rest -= c * d; } }
+    await closeRegister(owner, { registerId: open.id, counts, varianceReason: rest ? "COUNTING_ERROR" : null, notes: rest ? "test" : null, cashLeft: null, handoverReason: null });
+    const outB = await endDay(b.u, null);
+    assert.ok(outB.clockOut);
+    assert.equal(await db.clockEvent.count({ where: { employeeId: { in: [a.emp.id, b.emp.id] }, kind: "OUT", voidedAt: null } }), 2);
+    assert.equal(await db.auditEvent.count({ where: { action: "DAY_ENDED", actorId: { in: [a.u.personId, b.u.personId] } } }), 3);
+    const [dayA] = await attendance(a.emp.id, todayYmd(), todayYmd());
+    assert.ok(dayA.firstIn && dayA.lastOut);
   });
 
   console.log("\nAll integration flows passed.");

@@ -15,6 +15,8 @@ type Props = {
   locations: { id: string; name: string }[];
   locationId: string | null;
   registerOpen: boolean;
+  // Signed in on a registered shop device: the day ends with End my day (clock out + sign out).
+  shopDevice: boolean;
   theme: ThemeChoice;
   vapidKey: string | null;
   children: ReactNode;
@@ -35,7 +37,7 @@ function activeHref(hrefs: string[], path: string, query: string) {
   return best;
 }
 
-export function Shell({ nav, user, locations, locationId, registerOpen, theme, vapidKey, children }: Props) {
+export function Shell({ nav, user, locations, locationId, registerOpen, shopDevice, theme, vapidKey, children }: Props) {
   const path = usePathname();
   const query = useSearchParams().toString();
   const [open, setOpen] = useState(false);
@@ -70,7 +72,9 @@ export function Shell({ nav, user, locations, locationId, registerOpen, theme, v
         <Link href="/settings" className="meta hide-sm" style={{ textDecoration: "none" }}><span>{user.name} · {user.role}</span></Link>
         <ThemeSwitch initial={theme} />
         <Link className="btn" href="/switch">Switch cashier</Link>
-        <form action={logout}><button className="btn" type="submit">Log out</button></form>
+        {shopDevice && <Link className="btn btn-primary" href="/end">End<span className="hide-sm"> my</span> day</Link>}
+        {/* On a shop device End my day signs out too, so on a phone-width screen it takes Log out's place. */}
+        <form action={logout} className={shopDevice ? "hide-sm" : undefined}><button className="btn" type="submit">Log out</button></form>
       </header>
 
       <aside className="sidebar" aria-label="System modules">

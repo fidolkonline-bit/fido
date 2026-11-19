@@ -44,5 +44,6 @@ export async function closeRegister(_: FormState, f: FormData): Promise<FormStat
     return formError(e);
   }
   revalidatePath("/", "layout");
-  redirect(`/register/${id}?closed=1`);
+  // Closed from the End my day screen: go back there to clock out.
+  redirect(f.get("returnTo") === "/end" ? "/end" : `/register/${id}?closed=1`);
 }
