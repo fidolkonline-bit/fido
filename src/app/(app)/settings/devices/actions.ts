@@ -27,12 +27,12 @@ export async function unregisterDeviceForm(_: FormState, f: FormData): Promise<F
   return { ok: "Unregistered. Sign-ins on it now work like any other browser." };
 }
 
-export async function saveCutoff(_: FormState, f: FormData): Promise<FormState> {
+export async function saveAttendance(_: FormState, f: FormData): Promise<FormState> {
   const user = await requirePermission("settings.manage");
   try {
-    const v = await saveAttendanceSettings(user, { dayCutoff: str(f, "dayCutoff") ?? "" });
+    const v = await saveAttendanceSettings(user, { dayCutoff: str(f, "dayCutoff") ?? "", autoClockIn: f.get("autoClockIn") === "on" });
     revalidatePath("/settings/devices");
-    return { ok: `Saved. New sign-ins on shop devices end at ${v.dayCutoff}.` };
+    return { ok: `Saved. New sign-ins on shop devices end at ${v.dayCutoff}${v.autoClockIn ? " and clock employees in" : ""}.` };
   } catch (e) {
     return formError(e);
   }

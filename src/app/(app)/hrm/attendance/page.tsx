@@ -10,12 +10,20 @@ import { manualClockForm, voidClockForm } from "../actions";
 export const metadata = { title: "Attendance" };
 const time = (d: Date | null) => (d ? d.toLocaleTimeString("en-GB", { timeZone: "Asia/Colombo", hour: "2-digit", minute: "2-digit" }) : "—");
 
+type Ev = { device: { name: string } | null; correctedBy: { fullName: string } | null };
+const SOURCE: Record<string, (e: Ev) => string> = {
+  LOGIN: (e) => `Sign-in on ${e.device?.name ?? "shop device"}`,
+  SELF: (e) => (e.device ? `Clock button on ${e.device.name}` : "Clock button"),
+  MANUAL: (e) => `Manual — ${e.correctedBy?.fullName ?? ""}`,
+  IMPORT: () => "Import",
+};
+
 export default async function Attendance({ searchParams }: { searchParams: Promise<{ day?: string; emp?: string }> }) {
   const user = await requirePermission("hr.view");
   const { day = H.todayYmd(), emp } = await searchParams;
   const employees = await db.employeeProfile.findMany({ where: { status: "ACTIVE" }, include: { person: true, shift: true }, orderBy: { person: { fullName: "asc" } } });
   const rows = await Promise.all(employees.map(async (e) => ({ e, a: (await H.attendance(e.id, day, day))[0] })));
-  const events = emp ? await db.clockEvent.findMany({ where: { employeeId: emp, at: { gte: H.dayStart(day), lt: new Date(H.dayStart(day).getTime() + 86_400_000) } }, orderBy: { at: "asc" }, include: { correctedBy: true } }) : [];
+  const events = emp ? await db.clockEvent.findMany({ where: { employeeId: emp, at: { gte: H.dayStart(day), lt: new Date(H.dayStart(day).getTime() + 86_400_000) } }, orderBy: { at: "asc" }, include: { correctedBy: true, device: true } }) : [];
   const manage = can(user, "attendance.manage");
 
   return (
@@ -39,7 +47,8 @@ export default async function Attendance({ searchParams }: { searchParams: Promi
             columns={[
               { label: "Time", render: (e) => <span style={{ textDecoration: e.voidedAt ? "line-through" : undefined }}>{time(e.at)}</span> },
               { label: "Type", render: (e) => e.kind.toLowerCase() },
-              { label: "Source", render: (e) => e.source === "SELF" ? "Phone" : `Manual — ${e.correctedBy?.fullName ?? ""}` },
+              { label: "Source", render: (e) => SOURCE[e.source]?.(e) ?? e.source },
+              { label: "IP address", render: (e) => e.ip ?? "—" },
               { label: "Note", render: (e) => e.voidedAt ? `Voided: ${e.voidReason}` : e.note ?? "" },
               { label: "", render: (e) => manage && !e.voidedAt ? <form action={voidClockForm} className="row" style={{ gap: 4, flexWrap: "nowrap" }}><input type="hidden" name="id" value={e.id} /><input name="reason" placeholder="Reason" required style={{ width: 130, minHeight: 32 }} /><button className="btn btn-sm">Void</button></form> : e.voidedAt ? fmtDateTime(e.voidedAt) : null },
             ]} />

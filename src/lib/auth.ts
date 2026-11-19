@@ -51,13 +51,14 @@ export async function startSession(accountId: string, userAgent?: string | null,
     if (acc && (acc.role.permissions.includes("settings.manage") || acc.locations.length)) locationId = device.locationId;
   }
   if (!locationId) locationId = (await db.userLocation.findFirst({ where: { accountId }, select: { locationId: true } }))?.locationId ?? null;
-  await db.session.create({
+  const session = await db.session.create({
     data: { tokenHash: hashToken(token), accountId, expiresAt, userAgent: userAgent?.slice(0, 200), locationId, deviceId: device?.id ?? null },
   });
   await db.loginAccount.update({ where: { id: accountId }, data: { lastLoginAt: new Date() } });
   (await cookies()).set(COOKIE, token, {
     httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: "lax", path: "/", expires: expiresAt,
   });
+  return { sessionId: session.id, device: device && { id: device.id, locationId: device.locationId } };
 }
 
 export async function endSession() {

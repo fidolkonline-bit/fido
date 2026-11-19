@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { clientIp, endSession, hashPassword, loginLocked, recordLoginAttempt, requireUser, startSession, verifyPassword, verifyPin } from "@/lib/auth";
 import type { FormState } from "@/lib/forms";
+import { clockInOnSignIn } from "@/lib/hr";
 
 const WEAK = new Set(["0000", "1111", "1234", "4321", "123456", "000000", "111111", "2222", "9999"]);
 
@@ -27,8 +28,13 @@ export async function switchCashier(_: FormState, f: FormData): Promise<FormStat
   await recordLoginAttempt(target.username, ip, !!ok, "PIN");
   if (!ok) return { error: "PIN is not correct." };
   await endSession();
-  await startSession(target.id, h.get("user-agent"), { viaPin: true, locationId: loc?.id ?? null });
+  const s = await startSession(target.id, h.get("user-agent"), { viaPin: true, locationId: loc?.id ?? null });
   await db.auditEvent.create({ data: { actorId: target.personId, action: "CASHIER_SWITCHED", subjectType: "Person", subjectId: target.personId, detail: { from: current.personId } } });
+  // The person taking over is clocked in; the one handing over stays on the clock until they end their day.
+  if (s.device) {
+    await clockInOnSignIn({ personId: target.personId, sessionId: s.sessionId, deviceId: s.device.id, locationId: s.device.locationId, ip });
+    redirect("/start");
+  }
   redirect("/");
 }
 

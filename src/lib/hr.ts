@@ -5,6 +5,7 @@ import { db, posting } from "./db";
 import { D, ZERO } from "./money";
 import { seal, unseal } from "./vault";
 import type { CurrentUser } from "./auth";
+import { getAttendanceSettings } from "./shop-device";
 
 export class HrError extends Error {}
 
@@ -166,14 +167,45 @@ export async function cancelLeave(user: CurrentUser, id: string) {
 
 // ───────────── Clock in / out (§14.4) ─────────────
 
-export async function selfClock(user: CurrentUser, kind: "IN" | "OUT") {
+// Still on the clock: the last record is an IN from the last 16 hours. An older IN is a forgotten clock-out.
+export const stillClockedIn = (last: { kind: string; at: Date } | null | undefined, now = Date.now()) =>
+  last?.kind === "IN" && now - last.at.getTime() < 16 * 3_600_000;
+
+export async function selfClock(user: CurrentUser, kind: "IN" | "OUT", ip: string | null = null) {
   const emp = await db.employeeProfile.findUnique({ where: { personId: user.personId } });
   if (!emp || emp.status !== "ACTIVE") throw new HrError("You do not have an employee profile. Ask the manager to add one.");
   const last = await db.clockEvent.findFirst({ where: { employeeId: emp.id, voidedAt: null }, orderBy: { at: "desc" } });
   if (last?.kind === kind && Date.now() - last.at.getTime() < 16 * 3_600_000)
     throw new HrError(kind === "IN" ? "You are already clocked in." : "You are already clocked out.");
   // Server time is authoritative; the phone's clock is never trusted.
-  return db.clockEvent.create({ data: { employeeId: emp.id, kind, at: new Date(), source: "SELF", locationId: user.location?.id ?? null } });
+  return db.clockEvent.create({
+    data: {
+      employeeId: emp.id, kind, at: new Date(), source: "SELF", locationId: user.device?.locationId ?? user.location?.id ?? null,
+      deviceId: user.device?.id ?? null, ip: ip?.slice(0, 64) ?? null, sessionId: user.sessionId,
+    },
+  });
+}
+
+// A sign-in on a shop device clocks the person in, unless they are already on the clock or this is switched off.
+// Returns the new record, or null when nothing was recorded. Never throws: a sign-in must not fail over attendance.
+export async function clockInOnSignIn(s: { personId: string; sessionId: string; deviceId: string; locationId: string; ip: string | null }) {
+  try {
+    if (!(await getAttendanceSettings()).autoClockIn) return null;
+    const emp = await db.employeeProfile.findUnique({ where: { personId: s.personId } });
+    if (!emp || emp.status !== "ACTIVE") return null;
+    return await posting(async (tx) => {
+      // Two sign-ins at once (two tabs) must not make two clock-ins.
+      await tx.$queryRaw`SELECT id FROM "EmployeeProfile" WHERE id = ${emp.id} FOR UPDATE`;
+      const last = await tx.clockEvent.findFirst({ where: { employeeId: emp.id, voidedAt: null }, orderBy: { at: "desc" } });
+      if (stillClockedIn(last)) return null;
+      return tx.clockEvent.create({
+        data: { employeeId: emp.id, kind: "IN", at: new Date(), source: "LOGIN", locationId: s.locationId, deviceId: s.deviceId, ip: s.ip?.slice(0, 64) ?? null, sessionId: s.sessionId },
+      });
+    });
+  } catch (e) {
+    console.error("clock-in on sign-in failed", e);
+    return null;
+  }
 }
 
 export async function manualClock(user: CurrentUser, raw: { employeeId: string; kind: "IN" | "OUT"; at: Date; note: string }) {

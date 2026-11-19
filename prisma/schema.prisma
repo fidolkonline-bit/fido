@@ -183,7 +183,7 @@ model Session {
 }
 
 // A computer or tablet the owner marked as standing in a shop. Its browser keeps a random key in a cookie (only the
-// hash is stored). Sign-ins on it end every night and, from phase 2 on, clock the person in.
+// hash is stored). Sign-ins on it end every night and clock the person in.
 model ShopDevice {
   id             String    @id @default(cuid())
   name           String
@@ -196,6 +196,7 @@ model ShopDevice {
   lastSeenAt     DateTime?
   revokedAt      DateTime?
   sessions       Session[]
+  clockEvents    ClockEvent[]
 
   @@index([locationId])
 }
@@ -1348,9 +1349,14 @@ model ClockEvent {
   employee      EmployeeProfile @relation(fields: [employeeId], references: [id])
   kind          String // IN, OUT
   at            DateTime
-  source        String          @default("SELF") // SELF, MANUAL, IMPORT
+  source        String          @default("SELF") // SELF (clock button), LOGIN (sign-in on a shop device), MANUAL, IMPORT
   locationId    String?
   location      Location?       @relation(fields: [locationId], references: [id])
+  // Where it came from: the shop device, the address the request came from, and the sign-in (Session id).
+  deviceId      String?
+  device        ShopDevice?     @relation(fields: [deviceId], references: [id])
+  ip            String?
+  sessionId     String?
   note          String?
   correctedById String?
   correctedBy   Person?         @relation("ClockCorrector", fields: [correctedById], references: [id])

@@ -9,7 +9,7 @@ import type { CurrentUser } from "./auth";
 import { nextCutoff } from "./day-cutoff";
 
 // A shop device is a browser the owner marked as standing in a shop. It keeps a random key in a long-lived cookie;
-// the database only has its hash. Sign-ins on it end at the nightly cutoff, so staff sign in again every morning.
+// the database only has its hash. Sign-ins on it end at the nightly cutoff, so staff sign in again every morning, and clock them in.
 
 export class ShopDeviceError extends Error {}
 
@@ -21,6 +21,8 @@ const hashToken = (t: string) => createHash("sha256").update(t).digest("hex");
 
 export const attendanceSchema = z.object({
   dayCutoff: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Use a time like 02:00.").default("02:00"),
+  // Signing in on a shop device clocks an employee in.
+  autoClockIn: z.boolean().default(true),
 });
 export type AttendanceSettings = z.infer<typeof attendanceSchema>;
 
@@ -32,7 +34,7 @@ export async function getAttendanceSettings(): Promise<AttendanceSettings> {
 
 export async function saveAttendanceSettings(user: CurrentUser, raw: unknown) {
   const v = attendanceSchema.parse(raw);
-  await saveSetting("attendance", { ...(await getAttendanceSettings()), ...v }, user.personId);
+  await saveSetting("attendance", v, user.personId);
   return v;
 }
 

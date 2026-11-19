@@ -3,7 +3,8 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
-import { requireUser, requirePermission } from "@/lib/auth";
+import { headers } from "next/headers";
+import { clientIp, requireUser, requirePermission } from "@/lib/auth";
 import * as H from "@/lib/hr";
 import * as P from "@/lib/payroll";
 import { D } from "@/lib/money";
@@ -19,7 +20,8 @@ async function wrap(paths: string[], fn: () => Promise<unknown>, ok = "Saved."):
 // ── Self-service ──
 export async function clock(kind: "IN" | "OUT"): Promise<Res> {
   const user = await requireUser();
-  return wrap(["/hrm/me", "/hrm"], () => H.selfClock(user, kind), kind === "IN" ? "Clocked in." : "Clocked out.");
+  const ip = clientIp(await headers());
+  return wrap(["/hrm/me", "/hrm", "/start"], () => H.selfClock(user, kind, ip), kind === "IN" ? "Clocked in." : "Clocked out.");
 }
 
 export async function applyLeave(_: Res, f: FormData): Promise<Res> {

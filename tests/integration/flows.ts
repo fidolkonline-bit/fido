@@ -15,6 +15,7 @@ import { lotDate, nameInitials, nextLot } from "../../src/lib/lots";
 import { availability, storeCreditBalance } from "../../src/lib/stock";
 import { loginLocked, recordLoginAttempt } from "../../src/lib/login-guard";
 import type { CurrentUser } from "../../src/lib/auth";
+import { clockInOnSignIn } from "../../src/lib/hr";
 import { DENOMINATIONS, closeRegister, drawerSummary, openRegister, recordMovement } from "../../src/lib/register";
 
 if (!/127\.0\.0\.1|localhost/.test(process.env.DATABASE_URL ?? "")) throw new Error("Refusing to run: DATABASE_URL is not a local database.");
@@ -302,6 +303,31 @@ async function main() {
     assert.equal(await loginLocked(u, null), true);
     await db.loginAttempt.deleteMany({ where: { username: u, ok: false } }); // what a password reset does
     assert.equal(await loginLocked(u, null), false);
+  });
+
+  await step("sign-in on a shop device clocks in once; never on a second sign-in or when switched off", async () => {
+    const person = await db.person.create({ data: { fullName: `Clock ${randomUUID().slice(0, 6)}` } });
+    const emp = await db.employeeProfile.create({ data: { personId: person.id, joinedOn: new Date("2026-01-01") } });
+    const device = await db.shopDevice.create({ data: { name: "Test till", locationId: loc.id, tokenHash: randomUUID(), registeredById: acct.personId } });
+    const sign = (sessionId: string) => clockInOnSignIn({ personId: person.id, sessionId, deviceId: device.id, locationId: loc.id, ip: "10.0.0.7" });
+    const first = await sign("s1");
+    assert.ok(first);
+    assert.equal(first.source, "LOGIN");
+    assert.equal(first.deviceId, device.id);
+    assert.equal(first.ip, "10.0.0.7");
+    assert.equal(await sign("s2"), null); // already on the clock
+    const both = await Promise.all([db.clockEvent.update({ where: { id: first.id }, data: { voidedAt: new Date(), voidReason: "test" } }).then(() => sign("s3")), sign("s4")]);
+    assert.equal(await db.clockEvent.count({ where: { employeeId: emp.id, voidedAt: null } }), 1, "parallel sign-ins make one clock-in");
+    assert.ok(both.some(Boolean));
+    // A clock-in older than 16 hours is a forgotten clock-out: the next sign-in starts a new day.
+    await db.clockEvent.updateMany({ where: { employeeId: emp.id, voidedAt: null }, data: { at: new Date(Date.now() - 20 * 3_600_000) } });
+    assert.ok(await sign("s5"));
+    await db.appSetting.upsert({ where: { key: "attendance" }, create: { key: "attendance", value: { dayCutoff: "02:00", autoClockIn: false } }, update: { value: { dayCutoff: "02:00", autoClockIn: false } } });
+    await db.clockEvent.updateMany({ where: { employeeId: emp.id }, data: { voidedAt: new Date(), voidReason: "test" } });
+    assert.equal(await sign("s6"), null, "switched off");
+    await db.appSetting.delete({ where: { key: "attendance" } });
+    // No employee profile (the owner): nothing recorded.
+    assert.equal(await clockInOnSignIn({ personId: acct.personId, sessionId: "s7", deviceId: device.id, locationId: loc.id, ip: null }), null);
   });
 
   console.log("\nAll integration flows passed.");

@@ -5,7 +5,7 @@ import { fmtDateTime } from "@/lib/money";
 import { PageHead, DataTable, Badge } from "@/components/ui";
 import { ActionForm } from "@/components/ActionForm";
 import { SubmitButton } from "@/components/SubmitButton";
-import { registerThisDevice, saveCutoff, unregisterDeviceForm } from "./actions";
+import { registerThisDevice, saveAttendance, unregisterDeviceForm } from "./actions";
 
 export const metadata = { title: "Shop devices" };
 
@@ -21,8 +21,9 @@ export default async function ShopDevices() {
     <div className="stack" style={{ maxWidth: 900 }}>
       <PageHead eyebrow="Settings" title="Shop devices" />
       <p className="muted" style={{ margin: 0 }}>
-        Register the computers and tablets that stay in a shop. Anyone who signs in on one is signed out every night at the cutoff, so staff sign in again each
-        morning. Phones and computers at home are not registered and keep their normal sign-in.
+        Register the computers and tablets that stay in a shop. Signing in on one clocks an employee in and opens the start-of-day screen, and everyone is
+        signed out every night at the cutoff, so staff sign in again each morning. Phones and computers at home are not registered: signing in there never
+        clocks anyone in, and keeps the normal sign-in.
       </p>
 
       <section className="panel stack">
@@ -74,11 +75,13 @@ export default async function ShopDevices() {
           ]} />
       </section>
 
-      <ActionForm action={saveCutoff} className="panel stack" style={{ maxWidth: 520 }}>
-        <h2 style={{ margin: 0 }}>Nightly sign-out</h2>
+      <ActionForm action={saveAttendance} className="panel stack" style={{ maxWidth: 560 }}>
+        <h2 style={{ margin: 0 }}>Attendance and nightly sign-out</h2>
+        <label className="check"><input type="checkbox" name="autoClockIn" defaultChecked={settings.autoClockIn} /> Signing in on a shop device clocks the employee in</label>
         <label className="field"><span>Shop devices sign out at</span><input name="dayCutoff" type="time" defaultValue={settings.dayCutoff} required /></label>
         <p className="small muted" style={{ margin: 0 }}>
           Pick a time after the shop closes and before anyone starts, for example 02:00. It applies to new sign-ins; people already signed in keep the time they got.
+          With clock-in off, staff use the Clock in button on the start-of-day screen instead.
         </p>
         <div className="form-actions" style={{ marginTop: 0 }}><SubmitButton>Save</SubmitButton></div>
       </ActionForm>
