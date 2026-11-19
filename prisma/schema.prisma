@@ -67,6 +67,7 @@ model Location {
   clockEvents     ClockEvent[]
   tradeIns        TradeIn[]
   stockCounts     StockCount[]
+  shopDevices     ShopDevice[]
 }
 
 model NumberScheme {
@@ -142,6 +143,7 @@ model Person {
   stockCounts           StockCount[]
   repairPhotos          RepairPhoto[]
   instalmentPlans       InstalmentPlan[]
+  shopDevicesRegistered ShopDevice[]           @relation("ShopDeviceRegistrar")
 }
 
 model LoginAccount {
@@ -172,9 +174,30 @@ model Session {
   expiresAt         DateTime
   revokedAt         DateTime?
   userAgent         String?
+  // Set when the sign-in happened on a registered shop device; such a session ends at the nightly cutoff.
+  deviceId          String?
+  device            ShopDevice?        @relation(fields: [deviceId], references: [id])
   pushSubscriptions PushSubscription[]
 
   @@index([accountId])
+}
+
+// A computer or tablet the owner marked as standing in a shop. Its browser keeps a random key in a cookie (only the
+// hash is stored). Sign-ins on it end every night and, from phase 2 on, clock the person in.
+model ShopDevice {
+  id             String    @id @default(cuid())
+  name           String
+  locationId     String
+  location       Location  @relation(fields: [locationId], references: [id])
+  tokenHash      String    @unique
+  registeredById String
+  registeredBy   Person    @relation("ShopDeviceRegistrar", fields: [registeredById], references: [id])
+  createdAt      DateTime  @default(now())
+  lastSeenAt     DateTime?
+  revokedAt      DateTime?
+  sessions       Session[]
+
+  @@index([locationId])
 }
 
 // Every sign-in try (password or PIN). Used to lock a username / address after repeated failures and as the login log.

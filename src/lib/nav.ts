@@ -98,6 +98,7 @@ export const NAV: NavGroup[] = [
       { label: "Tax", href: "/settings/tax", perm: "settings.manage" },
       { label: "Loyalty points", href: "/settings/loyalty", perm: "settings.manage" },
       { label: "Repair terms & commission", href: "/settings/repairs", perm: "settings.manage" },
+      { label: "Shop devices", href: "/settings/devices", perm: "settings.manage" },
       { label: "Audit log", href: "/settings/audit", perm: "settings.manage" },
       { label: "Error log", href: "/settings/errors", perm: "settings.manage" },
       { label: "Backups & file storage", href: "/settings/backups", perm: "settings.manage" },

@@ -27,7 +27,7 @@ async function main() {
   const acct = await db.loginAccount.findFirstOrThrow({ include: { person: true, role: true } });
   const mk = (maxDiscountPct: number, perms: string[]): CurrentUser => ({
     sessionId: "t", accountId: acct.id, personId: acct.personId, name: acct.person.fullName, username: acct.username, role: acct.role.name, roleId: acct.roleId,
-    permissions: new Set(perms), maxDiscountPct: new (acct.maxDiscountPct.constructor as never as new (v: number) => typeof acct.maxDiscountPct)(maxDiscountPct), locations: [loc], location: loc,
+    permissions: new Set(perms), maxDiscountPct: new (acct.maxDiscountPct.constructor as never as new (v: number) => typeof acct.maxDiscountPct)(maxDiscountPct), locations: [loc], location: loc, device: null, expiresAt: new Date(Date.now() + 86_400_000),
   });
   const owner = mk(100, acct.role.permissions);
   const cashier = mk(10, ["sales.create", "contacts.view"]);

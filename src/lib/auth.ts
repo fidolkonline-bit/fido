@@ -6,6 +6,7 @@ import { createHash, randomBytes } from "crypto";
 import bcrypt from "bcryptjs";
 import { db } from "./db";
 import { can, type Permission } from "./permissions";
+import { deviceForSignIn } from "./shop-device";
 
 export { can };
 export { loginLocked, recordLoginAttempt, clientIp } from "./login-guard";
@@ -40,10 +41,18 @@ export async function verifyPin(accountId: string, pin: string) {
 
 export async function startSession(accountId: string, userAgent?: string | null, opts: { viaPin?: boolean; locationId?: string | null } = {}) {
   const token = randomBytes(32).toString("base64url");
-  const expiresAt = new Date(Date.now() + (opts.viaPin ? PIN_SESSION_HOURS * 3_600_000 : SESSION_DAYS * 86_400_000));
-  const firstLocation = opts.locationId ? { locationId: opts.locationId } : await db.userLocation.findFirst({ where: { accountId }, select: { locationId: true } });
+  let expiresAt = new Date(Date.now() + (opts.viaPin ? PIN_SESSION_HOURS * 3_600_000 : SESSION_DAYS * 86_400_000));
+  // On a registered shop device the sign-in ends at tonight's cutoff and starts in that device's shop (if allowed there).
+  const device = await deviceForSignIn();
+  if (device && device.cutoff < expiresAt) expiresAt = device.cutoff;
+  let locationId = opts.locationId ?? null;
+  if (!locationId && device) {
+    const acc = await db.loginAccount.findUnique({ where: { id: accountId }, select: { role: { select: { permissions: true } }, locations: { where: { locationId: device.locationId } } } });
+    if (acc && (acc.role.permissions.includes("settings.manage") || acc.locations.length)) locationId = device.locationId;
+  }
+  if (!locationId) locationId = (await db.userLocation.findFirst({ where: { accountId }, select: { locationId: true } }))?.locationId ?? null;
   await db.session.create({
-    data: { tokenHash: hashToken(token), accountId, expiresAt, userAgent: userAgent?.slice(0, 200), locationId: firstLocation?.locationId },
+    data: { tokenHash: hashToken(token), accountId, expiresAt, userAgent: userAgent?.slice(0, 200), locationId, deviceId: device?.id ?? null },
   });
   await db.loginAccount.update({ where: { id: accountId }, data: { lastLoginAt: new Date() } });
   (await cookies()).set(COOKIE, token, {
@@ -69,6 +78,7 @@ async function loadUser() {
       account: {
         include: { person: true, role: true, locations: { include: { location: true } } },
       },
+      device: { select: { id: true, name: true, locationId: true, revokedAt: true } },
     },
   });
   if (!session || session.revokedAt || session.expiresAt < new Date()) return null;
@@ -93,6 +103,9 @@ async function loadUser() {
     maxDiscountPct: account.maxDiscountPct,
     locations,
     location,
+    // The registered shop device this sign-in happened on, if it is still registered.
+    device: session.device && !session.device.revokedAt ? { id: session.device.id, name: session.device.name, locationId: session.device.locationId } : null,
+    expiresAt: session.expiresAt,
   };
 }
 
