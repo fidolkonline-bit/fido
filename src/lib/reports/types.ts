@@ -24,7 +24,10 @@ export type Ctx = {
   params: Record<string, string>;
 };
 
-export type ParamDef = { key: string; label: string; options: [string, string][] };
+export type ParamOptions = [string, string][];
+// Options are fixed, or loaded when the report opens (e.g. the people who earned commission). The first option is the default.
+export type ParamDef = { key: string; label: string; options: ParamOptions | (() => Promise<ParamOptions>) };
+export type ResolvedParam = { key: string; label: string; options: ParamOptions };
 
 export type ReportDef = {
   id: string; // RP-01 …

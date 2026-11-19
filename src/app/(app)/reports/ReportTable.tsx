@@ -1,0 +1,40 @@
+import Link from "next/link";
+import { fmtCell } from "@/lib/reports/run";
+import type { Result, Row } from "@/lib/reports/types";
+import { Stat } from "@/components/ui";
+
+const PAGE = 200; // rows on screen; totals cover every row and the CSV has them all
+
+const toneColor = (r: Row) => (r._tone === "err" ? "var(--err)" : r._tone === "warn" ? "var(--warn)" : r._tone === "ok" ? "var(--ok)" : undefined);
+
+// Summary tiles, the table with its totals row, and the notes of a report result. Shared by Reports and "My commission".
+export function ReportTable({ result }: { result: Result }) {
+  return (
+    <>
+      {result.summary && <div className="stats">{result.summary.map((s) => <Stat key={s.label} label={s.label} value={fmtCell(s.value, s.kind) || "—"} basis={s.note} />)}</div>}
+      <div className={"tablewrap" + (result.columns.length <= 6 ? " cards" : "")}>
+        {result.rows.length === 0 ? <div className="empty">No data for these filters.</div> : (
+          <table className="dt">
+            <thead><tr>{result.columns.map((c) => <th key={c.key} className={c.kind && c.kind !== "text" && c.kind !== "date" && c.kind !== "datetime" ? "num" : undefined}>{c.label}</th>)}</tr></thead>
+            <tbody>
+              {result.rows.slice(0, PAGE).map((r, i) => (
+                <tr key={i} style={{ color: toneColor(r) }}>
+                  {result.columns.map((c, j) => {
+                    const v = fmtCell(r[c.key], c.kind);
+                    const num = c.kind && c.kind !== "text" && c.kind !== "date" && c.kind !== "datetime";
+                    return <td key={c.key} data-label={c.label} className={[num ? "num" : "", j === 0 ? "primary" : ""].join(" ").trim() || undefined}>{j === 0 && r._href ? <Link className="rowlink" href={r._href}>{v}</Link> : v}</td>;
+                  })}
+                </tr>
+              ))}
+            </tbody>
+            {result.totals && (
+              <tfoot><tr>{result.columns.map((c, i) => <td key={c.key} data-label={c.label} className={i > 0 ? "num" : undefined}>{i === 0 ? `Total · all ${result.rows.length} rows` : c.key in result.totals! ? fmtCell(result.totals![c.key], c.kind) : ""}</td>)}</tr></tfoot>
+            )}
+          </table>
+        )}
+      </div>
+      {result.rows.length > PAGE && <p className="small muted">Showing the first {PAGE} of {result.rows.length} rows on screen. Totals and the CSV export include all rows.</p>}
+      {result.notes?.map((n) => <p key={n} className="small muted" style={{ margin: 0 }}>{n}</p>)}
+    </>
+  );
+}

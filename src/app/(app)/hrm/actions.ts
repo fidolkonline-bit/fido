@@ -192,7 +192,9 @@ export async function payAllForm(f: FormData) {
 // ── Commission ──
 export async function approveCommissionForm(f: FormData) {
   const user = await requirePermission("commissions.manage");
-  await P.approveCommission(user, String(f.get("recipientId")), new Date());
+  // "Up to" a business date (e.g. the last day of the month), so next month's commission stays unapproved.
+  const upTo = String(f.get("upTo") ?? "");
+  await P.approveCommission(user, String(f.get("recipientId")), /^\d{4}-\d{2}-\d{2}$/.test(upTo) ? new Date(`${upTo}T23:59:59.999+05:30`) : new Date());
   revalidatePath("/hrm/commissions");
 }
 

@@ -3,6 +3,7 @@ import type { PayLine } from "../payroll";
 import type { ReportDef, Row } from "./types";
 import { D, ZERO, sum, inPeriod, locIn, totalsOf, groupSum } from "./util";
 import { channelLabel } from "../sale-channels";
+import { commissionPeople, commissionStatement } from "../commission-statement";
 
 const saleWhere = (ctx: Parameters<ReportDef["run"]>[0]) => ({ stage: "FINAL", soldAt: inPeriod(ctx), locationId: locIn(ctx) });
 
@@ -131,13 +132,21 @@ export const salesReports: ReportDef[] = [
   {
     id: "RP-12", slug: "commissions", title: "Sales representative / commissions", group: "Profit & sales",
     basis: "Commission accrued on sales in the period (category pool × share), technician commission on collected repairs (share of labour), reversals from returns, and payout state. Target bonuses are in RP-35.",
+    params: [
+      { key: "view", label: "View", options: [["summary", "Summary by person"], ["invoice", "Each invoice"]] },
+      { key: "person", label: "Person", options: commissionPeople },
+    ],
     async run(ctx) {
-      const acc = await db.commissionAccrual.findMany({ where: { createdAt: inPeriod(ctx), OR: [{ saleLine: { sale: { locationId: locIn(ctx) } } }, { repairJob: { locationId: locIn(ctx) } }] }, include: { recipient: true, settlement: true } });
-      const g = groupSum(acc, (a) => `${a.recipient.fullName}|${a.role}`, {
+      const personId = ctx.params.person && ctx.params.person !== "all" ? ctx.params.person : undefined;
+      if (ctx.params.view === "invoice") return commissionStatement({ from: ctx.from, to: ctx.to, personId, locationIds: ctx.locationIds });
+      const acc = await db.commissionAccrual.findMany({ where: { createdAt: inPeriod(ctx), ...(personId ? { recipientId: personId } : {}), OR: [{ saleLine: { sale: { locationId: locIn(ctx) } } }, { repairJob: { locationId: locIn(ctx) } }] }, include: { recipient: true, settlement: true } });
+      const g = groupSum(acc, (a) => `${a.recipientId}|${a.recipient.fullName}|${a.role}`, {
         basis: (a) => (D(a.amount).gt(0) ? a.basis : 0), accrued: (a) => (D(a.amount).gt(0) ? a.amount : 0), reversed: (a) => (D(a.amount).lt(0) ? a.amount : 0),
         settled: (a) => (a.settlementId ? a.amount : 0), approved: (a) => (a.approvedAt && !a.settlementId ? a.amount : 0), pending: (a) => (!a.approvedAt && !a.settlementId ? a.amount : 0),
       });
-      const rows: Row[] = [...g.entries()].map(([k, v]) => { const [name, role] = k.split("|"); return { name, role: role === "USER" ? "Salesperson" : role === "TECHNICIAN" ? "Technician (repairs)" : "Agent", basis: v.basis, accrued: v.accrued, reversed: v.reversed, net: v.accrued.plus(v.reversed), paid: v.settled, approved: v.approved, pending: v.pending }; });
+      const loc = ctx.locationIds.length > 1 ? "all" : ctx.locationIds[0] ?? "";
+      const statement = (id: string) => `/reports/commissions?${new URLSearchParams({ view: "invoice", person: id, period: "custom", from: ctx.fromYmd, to: ctx.toYmd, loc })}`;
+      const rows: Row[] = [...g.entries()].map(([k, v]) => { const [id, name, role] = k.split("|"); return { _href: statement(id), name, role: role === "USER" ? "Salesperson" : role === "TECHNICIAN" ? "Technician (repairs)" : "Agent", basis: v.basis, accrued: v.accrued, reversed: v.reversed, net: v.accrued.plus(v.reversed), paid: v.settled, approved: v.approved, pending: v.pending }; });
       return {
         columns: [{ key: "name", label: "Recipient" }, { key: "role", label: "Type" }, { key: "basis", label: "Eligible sales", kind: "money" }, { key: "accrued", label: "Accrued", kind: "money" }, { key: "reversed", label: "Return reversals", kind: "money" }, { key: "net", label: "Net", kind: "money" }, { key: "paid", label: "Paid", kind: "money" }, { key: "approved", label: "Approved, unpaid", kind: "money" }, { key: "pending", label: "Not approved", kind: "money" }],
         rows, totals: totalsOf(rows, ["basis", "accrued", "reversed", "net", "paid", "approved", "pending"]),

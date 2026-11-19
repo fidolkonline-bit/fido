@@ -1,4 +1,6 @@
 import { requirePermission } from "@/lib/auth";
+import { can } from "@/lib/permissions";
+import { todayYmd } from "@/lib/hr";
 import { db } from "@/lib/db";
 import { money, fmtDateTime } from "@/lib/money";
 import { commissionOutstanding } from "@/lib/payroll";
@@ -14,7 +16,14 @@ export const metadata = { title: "Commission payout" };
 type Search = { who?: string; type?: string; state?: string; method?: string; from?: string; to?: string; page?: string };
 
 export default async function Commissions({ searchParams }: { searchParams: Promise<Search> }) {
-  await requirePermission("commissions.manage");
+  const user = await requirePermission("commissions.manage");
+  const today = todayYmd();
+  const lastMonthEnd = new Date(Date.UTC(Number(today.slice(0, 4)), Number(today.slice(5, 7)) - 1, 0)).toISOString().slice(0, 10);
+  const canReport = can(user, "reports.view");
+  const lastMonthCut = new Date(`${lastMonthEnd}T23:59:59.999+05:30`);
+  // Month end: if someone still has unapproved commission from before this month, default to approving and showing last month.
+  const older = (g: { rows: { createdAt: Date; approvedAt: Date | null }[] }) => g.rows.some((r) => !r.approvedAt && r.createdAt <= lastMonthCut);
+  const statement = (g: Parameters<typeof older>[0] & { recipient: { id: string } }) => `/reports/commissions?view=invoice&person=${g.recipient.id}&period=${older(g) ? "lastmonth" : "month"}&loc=all`;
   const sp = await searchParams;
   const { who = "", type = "", state = "", method = "", from: fromDay = "", to: toDay = "" } = sp;
   const page = pageOf(sp.page);
@@ -47,7 +56,7 @@ export default async function Commissions({ searchParams }: { searchParams: Prom
   return (
     <div className="stack">
       <PageHead eyebrow="HRM" title="Commission payout" />
-      <p className="small muted" style={{ margin: 0 }}>Commission accrues on each sale and is reversed by returns. Approve it, then pay it either directly or through payroll — each commission line can be paid only once.</p>
+      <p className="small muted" style={{ margin: 0 }}>Commission accrues on each sale and is reversed by returns. Approve it up to a date (usually the last day of the month), then pay it either directly or through payroll — each commission line can be paid only once. "View statement" lists every invoice behind the amount.</p>
       <form className="toolbar dense" role="search">
         <select name="who" defaultValue={who} aria-label="Recipient">
           <option value="">Everyone</option>
@@ -76,14 +85,22 @@ export default async function Commissions({ searchParams }: { searchParams: Prom
       <p className="small muted" style={{ margin: 0 }}>Recipient and type filter both tables. Outstanding state applies to the first table; payout method and dates apply to recent payouts.</p>
       <DataTable rows={groups} rowKey={(g) => g.recipient.id} empty={filtered ? "No outstanding commission matches these filters." : "No outstanding commission."}
         columns={[
-          { label: "Recipient", primary: true, render: (g) => <>{g.recipient.fullName} {g.recipient.employee ? <Badge>Employee</Badge> : <Badge tone="muted">Agent</Badge>}</> },
+          { label: "Recipient", primary: true, render: (g) => <>{g.recipient.fullName} {g.recipient.employee ? <Badge>Employee</Badge> : <Badge tone="muted">Agent</Badge>}{canReport && <> · <Link className="small" href={statement(g)}>View statement</Link></>}</> },
           { label: "Lines", num: true, render: (g) => g.rows.length },
           { label: "Not yet approved", num: true, render: (g) => money(g.pending) },
           { label: "Approved, unpaid", num: true, render: (g) => money(g.approved) },
           {
             label: "", render: (g) => (
               <div className="stack" style={{ gap: 6 }}>
-                {g.pending.abs().gt(0) && <form action={approveCommissionForm}><input type="hidden" name="recipientId" value={g.recipient.id} /><SubmitButton className="btn btn-sm">Approve {money(g.pending)}</SubmitButton></form>}
+                {g.pending.abs().gt(0) && (
+                  <form action={approveCommissionForm} className="row" style={{ gap: 4 }}>
+                    <input type="hidden" name="recipientId" value={g.recipient.id} />
+                    <label className="small muted" style={{ display: "flex", alignItems: "center", gap: 4 }}>up to
+                      <input type="date" name="upTo" defaultValue={older(g) ? lastMonthEnd : today} max={today} aria-label="Approve commission earned up to" style={{ width: 150, minHeight: 32 }} />
+                    </label>
+                    <SubmitButton className="btn btn-sm">Approve</SubmitButton>
+                  </form>
+                )}
                 {g.approved.gt(0) && (
                   <ActionForm action={payCommissionForm} className="row" style={{ gap: 4 }}>
                     <input type="hidden" name="recipientId" value={g.recipient.id} />

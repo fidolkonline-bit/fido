@@ -3,7 +3,7 @@ import { Prisma } from "@prisma/client";
 import { can } from "../permissions";
 import type { CurrentUser } from "../auth";
 import { dayStart, todayYmd } from "../hr";
-import type { Ctx, ReportDef, Result, Cell, Col } from "./types";
+import type { Ctx, ReportDef, Result, Cell, Col, ResolvedParam } from "./types";
 
 const ymd = (d: Date) => d.toISOString().slice(0, 10);
 
@@ -34,7 +34,8 @@ export async function runReport(user: CurrentUser, def: ReportDef, sp: Record<st
   const { preset, from, to } = resolvePeriod(sp);
   const permitted = user.locations.map((l) => l.id);
   const locationIds = sp.loc === "all" ? permitted : sp.loc && permitted.includes(sp.loc) ? [sp.loc] : user.location ? [user.location.id] : permitted;
-  const params = Object.fromEntries((def.params ?? []).map((p) => [p.key, sp[p.key] && p.options.some(([v]) => v === sp[p.key]) ? sp[p.key]! : p.options[0][0]]));
+  const paramDefs: ResolvedParam[] = await Promise.all((def.params ?? []).map(async (p) => ({ key: p.key, label: p.label, options: typeof p.options === "function" ? await p.options() : p.options })));
+  const params = Object.fromEntries(paramDefs.map((p) => [p.key, sp[p.key] && p.options.some(([v]) => v === sp[p.key]) ? sp[p.key]! : p.options[0][0]]));
   const ctx: Ctx = { user, from: dayStart(from), to: new Date(dayStart(to).getTime() + 86_400_000), fromYmd: from, toYmd: to, locationIds, showCost: can(user, "cost.view"), params };
   const result = await def.run(ctx);
   // Hidden cost fields never leave the server, on screen or in exports (spec §17).
@@ -44,7 +45,7 @@ export async function runReport(user: CurrentUser, def: ReportDef, sp: Record<st
     result.rows = result.rows.map((r) => Object.fromEntries(Object.entries(r).filter(([k]) => !hidden.has(k))) as typeof r);
     if (result.totals) result.totals = Object.fromEntries(Object.entries(result.totals).filter(([k]) => !hidden.has(k)));
   }
-  return { result, ctx, preset, scope: sp.loc === "all" ? "All permitted locations" : user.locations.find((l) => l.id === locationIds[0])?.name ?? "" };
+  return { result, ctx, preset, paramDefs, scope: sp.loc === "all" ? "All permitted locations" : user.locations.find((l) => l.id === locationIds[0])?.name ?? "" };
 }
 
 export function fmtCell(v: Cell, kind?: Col["kind"], forCsv = false): string {
