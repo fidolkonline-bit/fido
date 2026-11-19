@@ -12,11 +12,14 @@ import { saveDraftAction } from "../sales/drafts/actions";
 import { SALE_CHANNELS, CHANNEL_LABEL, type SaleChannel } from "@/lib/sale-channels";
 import { DebtStrip, HistoryDialog, RepaymentDialog, useBalance, type DebtPerms, type RecvAccount } from "./DebtPanel";
 
-// lots: the salesperson's explicit lot choice (one row, or an explicit split); lotOptions: eligible lots here (null = loading).
+// lots: the lots this line takes (one row, or a split); lotOptions: eligible lots here, oldest first (null = loading).
+// lotMode "FIFO" fills from the oldest lot and follows the quantity; "CHOSEN" is the salesperson's own pick and is kept
+// as they set it. Either way the server receives the exact lots and quantities and rechecks them under lock.
 type LotPick = { layerId: string; qty: number };
+type LotMode = "FIFO" | "CHOSEN";
 type CartLine = {
   product: ProductHit; qty: number; price: string; discount: string; devices: DeviceHit[];
-  rule: string; listPrice: number; fallback: boolean; lots: LotPick[]; lotOptions: LayerHit[] | null;
+  rule: string; listPrice: number; fallback: boolean; lots: LotPick[]; lotOptions: LayerHit[] | null; lotMode: LotMode; lotOpen: boolean;
 };
 export type DraftPrefill = { id: string; number: string; lines: { product: ProductHit; qty: number; price: string; discount: string }[] };
 type Pay = { key: string; method: "CASH" | "CARD" | "BANK_TRANSFER" | "CHEQUE" | "STORE_CREDIT" | "OTHER"; amount: string; accountId: string; reference: string };
@@ -24,6 +27,19 @@ type Customer = { id: string; name: string; phone: string | null; code?: string 
 type Tier = { id: string; name: string; allowed: boolean };
 const STANDARD: Policy = { tier: null, adjustmentPct: null, groupName: null };
 const needsLot = (l: CartLine) => l.product.available !== null && !l.product.tracked;
+const r4 = (x: number) => Math.round(x * 10000) / 10000;
+// First in, first out: take from the oldest lot, then the next oldest, until the quantity is covered (or stock runs out).
+const fifoFill = (opts: LayerHit[], qty: number): LotPick[] => {
+  const out: LotPick[] = [];
+  let need = r4(qty);
+  for (const o of opts) {
+    if (need <= 0) break;
+    const take = Math.min(Number(o.qtyRemaining), need);
+    if (take > 0) { out.push({ layerId: o.id, qty: r4(take) }); need = r4(need - take); }
+  }
+  return out;
+};
+const lotDay = (iso: string) => new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Colombo" });
 type Props = {
   locationName: string; rounding: number; maxDiscountPct: number; canQuickAdd: boolean; selfId: string;
   salespeople: { id: string; name: string }[]; agents: { id: string; name: string }[]; accounts: { id: string; name: string; type: string }[];
@@ -47,7 +63,7 @@ export function Pos(props: Props) {
   const [cart, setCart] = useState<CartLine[]>(() => (props.initialDraft?.lines ?? []).map((l) => {
     // A resumed quote keeps its saved price; the rule shows whether that still matches today's pricing.
     const r = resolvePrice(l.product, props.initialCustomer?.pricing ?? STANDARD);
-    return { ...l, devices: [], listPrice: r.price, fallback: r.fallback, rule: n(l.price) === r.price ? r.rule : "Saved price from the quote / parked sale", lots: [], lotOptions: null };
+    return { ...l, devices: [], listPrice: r.price, fallback: r.fallback, rule: n(l.price) === r.price ? r.rule : "Saved price from the quote / parked sale", lots: [], lotOptions: null, lotMode: "FIFO" as LotMode, lotOpen: false };
   }));
   const [draftId, setDraftId] = useState<string | null>(props.initialDraft?.id ?? null);
   const [saved, setSaved] = useState<{ id: string; number: string; kind: string } | null>(null);
@@ -85,7 +101,7 @@ export function Pos(props: Props) {
     o === undefined ? (c?.pricing ?? STANDARD) : o === null ? STANDARD : { tier: props.tiers.find((t) => t.id === o) ?? null, adjustmentPct: null, groupName: null };
   const policy = policyFor(customer, override);
   const priced = (p: ProductHit) => { const r = resolvePrice(p, policy); return { price: r.price.toFixed(2), listPrice: r.price, rule: r.rule, fallback: r.fallback }; };
-  const newLine = (p: ProductHit, devices: DeviceHit[] = []): CartLine => ({ product: p, qty: Math.max(1, devices.length), discount: "", devices, lots: [], lotOptions: null, ...priced(p) });
+  const newLine = (p: ProductHit, devices: DeviceHit[] = []): CartLine => ({ product: p, qty: Math.max(1, devices.length), discount: "", devices, lots: [], lotOptions: null, lotMode: "FIFO", lotOpen: false, ...priced(p) });
 
   // Changing customer or tier with items in the cart shows the price changes first; lots, devices and quantities never change.
   const applyPricing = (c: Customer | null, o: string | null | undefined) => {
@@ -105,34 +121,63 @@ export function Pos(props: Props) {
     setReprice({ customer: c, override: o, clearedTier, before: subtotal, after, rows });
   };
 
-  // Eligible lots for a line: this location's saleable stock only. One lot is preselected; several need a choice.
+  // Eligible lots for a line: this location's saleable stock only, oldest first. FIFO picks the oldest automatically;
+  // a lot the salesperson chose (or scanned) is kept while it is still available.
   const loadLots = async (productId: string) => {
     const opts = await listLayers(productId);
     setCart((cs) => cs.map((l) => {
       if (l.product.id !== productId) return l;
-      const kept = l.lots.filter((x) => !x.layerId || opts.some((o) => o.id === x.layerId));
-      return { ...l, lotOptions: opts, lots: kept.length ? kept : opts.length === 1 ? [{ layerId: opts[0].id, qty: l.qty }] : [] };
+      const kept = l.lots.filter((x) => opts.some((o) => o.id === x.layerId));
+      if (l.lotMode === "CHOSEN" && kept.length) return { ...l, lotOptions: opts, lots: kept };
+      return { ...l, lotOptions: opts, lotMode: "FIFO", lots: fifoFill(opts, l.qty) };
     }));
   };
   const lotsKey = cart.filter((l) => needsLot(l) && l.lotOptions === null).map((l) => l.product.id).join(",");
   useEffect(() => { for (const id of lotsKey.split(",").filter(Boolean)) loadLots(id); }, [lotsKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const setQty = (id: string, qty: number) => setCart((cs) => cs.map((l) => (l.product.id !== id ? l : { ...l, qty, lots: l.lots.length === 1 ? [{ ...l.lots[0], qty }] : l.lots })));
-  const setLots = (id: string, f: (lots: LotPick[], l: CartLine) => LotPick[]) =>
-    setCart((cs) => cs.map((l) => { if (l.product.id !== id) return l; const lots = f(l.lots, l); return { ...l, lots, qty: lots.length > 1 ? lots.reduce((a, x) => a + x.qty, 0) : l.qty }; }));
+  // FIFO lines refill from the oldest lot when the quantity changes; a single chosen lot follows the quantity.
+  const withQty = (l: CartLine, qty: number): CartLine =>
+    l.lotMode === "FIFO" ? { ...l, qty, lots: l.lotOptions ? fifoFill(l.lotOptions, qty) : [] }
+      : { ...l, qty, lots: l.lots.length === 1 ? [{ ...l.lots[0], qty }] : l.lots };
+  const setQty = (id: string, qty: number) => setCart((cs) => cs.map((l) => (l.product.id !== id ? l : withQty(l, qty))));
+  const patchLine = (id: string, f: (l: CartLine) => CartLine) => setCart((cs) => cs.map((l) => (l.product.id !== id ? l : f(l))));
+  // The salesperson's own choice: sell the whole quantity from one lot.
+  const chooseLot = (id: string, layerId: string) => patchLine(id, (l) => ({ ...l, lotMode: "CHOSEN", lots: [{ layerId, qty: l.qty }] }));
+  // Split by hand: set how many come from one lot (0 drops it). The line quantity becomes the total of the lots.
+  const setLotQty = (id: string, layerId: string, qty: number) => patchLine(id, (l) => {
+    const has = l.lots.some((x) => x.layerId === layerId);
+    const lots = (has ? l.lots.map((x) => (x.layerId === layerId ? { ...x, qty: r4(qty) } : x)) : [...l.lots, { layerId, qty: r4(qty) }]).filter((x) => x.qty > 0);
+    const opts = l.lotOptions ?? [];
+    lots.sort((a, b) => opts.findIndex((o) => o.id === a.layerId) - opts.findIndex((o) => o.id === b.layerId));
+    const total = r4(lots.reduce((a, x) => a + x.qty, 0));
+    return { ...l, lotMode: "CHOSEN", lots, qty: total > 0 ? total : l.qty };
+  });
+  const backToFifo = (id: string) => patchLine(id, (l) => ({ ...l, lotMode: "FIFO", lots: l.lotOptions ? fifoFill(l.lotOptions, l.qty) : [] }));
+  // A chosen lot that is short: keep what it has and take the rest from the other lots, oldest first.
+  const fillRest = (id: string) => patchLine(id, (l) => {
+    const opts = l.lotOptions ?? [];
+    const kept = l.lots.map((x) => { const o = opts.find((op) => op.id === x.layerId); return o ? { ...x, qty: Math.min(x.qty, n(o.qtyRemaining)) } : x; }).filter((x) => x.qty > 0);
+    const rest = r4(l.qty - kept.reduce((a, x) => a + x.qty, 0));
+    const lots = [...kept, ...fifoFill(opts.filter((o) => !kept.some((x) => x.layerId === o.id)), rest)];
+    lots.sort((a, b) => opts.findIndex((o) => o.id === a.layerId) - opts.findIndex((o) => o.id === b.layerId));
+    return { ...l, lots };
+  });
   const lotOf = (l: CartLine, layerId: string) => l.lotOptions?.find((o) => o.id === layerId);
-  const lotLabel = (o: LayerHit) => `${o.lotCode ?? "(no lot)"} · ${o.reference ?? "—"} · ${o.location} · ${n(o.qtyRemaining)} available`;
   const lotIssue = (l: CartLine): string | null => {
     if (!needsLot(l)) return null;
     if (!l.lotOptions) return "Loading lots…";
     if (!l.lotOptions.length) return "No stock in any lot at this location";
-    if (!l.lots.length || l.lots.some((x) => !x.layerId)) return l.lotOptions.length > 1 ? "Choose the lot being supplied" : "Choose the lot";
+    if (!l.lots.length) return "Choose the lot being sold";
     for (const x of l.lots) {
       const o = lotOf(l, x.layerId);
       if (!o) return "That lot is no longer available — choose another";
       if (x.qty > n(o.qtyRemaining)) return `Lot ${o.lotCode ?? "(no lot)"} has only ${n(o.qtyRemaining)} — ${round2(x.qty - n(o.qtyRemaining))} short`;
     }
-    if (Math.abs(l.lots.reduce((a, x) => a + x.qty, 0) - l.qty) > 1e-9) return "Lot quantities do not add up to the line quantity";
+    const inLots = r4(l.lots.reduce((a, x) => a + x.qty, 0));
+    if (Math.abs(inLots - l.qty) > 1e-9) {
+      const stock = r4(l.lotOptions.reduce((a, o) => a + n(o.qtyRemaining), 0));
+      return l.lotMode === "FIFO" || stock < l.qty ? `Only ${stock} in stock here — ${r4(l.qty - stock)} short` : "Lot quantities do not add up to the line quantity";
+    }
     return null;
   };
 
@@ -186,14 +231,16 @@ export function Pos(props: Props) {
     const scanned = fromScan ? p.scannedLayerId : undefined;
     setCart((c) => {
       const i = c.findIndex((l) => l.product.id === p.id);
-      if (i < 0) return [...c, scanned ? { ...newLine(p), lots: [{ layerId: scanned, qty: 1 }] } : newLine(p)];
+      if (i < 0) return [...c, scanned ? { ...newLine(p), lotMode: "CHOSEN", lots: [{ layerId: scanned, qty: 1 }] } : newLine(p)];
       return c.map((l, j) => {
         if (j !== i) return l;
-        // A scanned lot label adds to that exact lot (an explicit split if the line already takes another lot).
-        if (scanned && l.lots.length && !l.lots.some((x) => x.layerId === scanned)) return { ...l, qty: l.qty + 1, lots: [...l.lots, { layerId: scanned, qty: 1 }] };
-        if (scanned && l.lots.length > 1) return { ...l, qty: l.qty + 1, lots: l.lots.map((x) => (x.layerId === scanned ? { ...x, qty: x.qty + 1 } : x)) };
-        if (scanned && !l.lots.length) return { ...l, qty: l.qty + 1, lots: [{ layerId: scanned, qty: l.qty + 1 }] };
-        return { ...l, qty: l.qty + 1, lots: l.lots.length === 1 ? [{ ...l.lots[0], qty: l.lots[0].qty + 1 }] : l.lots };
+        // A scanned lot label is the item in hand: that unit comes from the scanned lot, the rest stay where they were.
+        if (scanned && !l.lots.length) return { ...l, qty: l.qty + 1, lotMode: "CHOSEN", lots: [{ layerId: scanned, qty: l.qty + 1 }] };
+        if (scanned) {
+          const lots = l.lots.some((x) => x.layerId === scanned) ? l.lots.map((x) => (x.layerId === scanned ? { ...x, qty: x.qty + 1 } : x)) : [...l.lots, { layerId: scanned, qty: 1 }];
+          return { ...l, qty: l.qty + 1, lotMode: "CHOSEN", lots };
+        }
+        return withQty(l, l.qty + 1);
       });
     });
     setHits([]); setError(null);
@@ -266,7 +313,7 @@ export function Pos(props: Props) {
       const r = await completeSale({
         idempotencyKey: idem,
         customerId: customer?.id ?? null,
-        lines: cart.map((l) => ({ productId: l.product.id, qty: l.qty, unitPrice: l.price, discount: round2(n(l.discount) + offerAmt(l)), deviceIds: l.devices.map((d) => d.id), lots: l.lots.filter((x) => x.layerId), discountRuleId: l.product.offer?.ruleId ?? null })),
+        lines: cart.map((l) => ({ productId: l.product.id, qty: l.qty, unitPrice: l.price, discount: round2(n(l.discount) + offerAmt(l)), deviceIds: l.devices.map((d) => d.id), lots: l.lots.filter((x) => x.layerId && x.qty > 0), discountRuleId: l.product.offer?.ruleId ?? null })),
         ...(override !== undefined ? { tierOverride: override } : {}),
         draftId,
         invoiceDiscount: n(invDisc),
@@ -349,34 +396,28 @@ export function Pos(props: Props) {
                       <span className="small" style={{ display: "block", color: l.fallback ? "var(--warn)" : "var(--muted)" }}>Price: {l.rule}{manual ? ` · changed by hand from ${fmt(l.listPrice)}` : ""}</span>
                       {needsLot(l) && (
                         <span className="lot-pick">
-                          {l.lots.length === 0 && l.lotOptions && l.lotOptions.length > 0 && (
-                            <select value="" aria-label={`Lot for ${l.product.name}`} onChange={(e) => setLots(l.product.id, () => [{ layerId: e.target.value, qty: l.qty }])}>
-                              <option value="">Choose lot…</option>{l.lotOptions.map((o) => <option key={o.id} value={o.id}>{lotLabel(o)}</option>)}
-                            </select>
-                          )}
-                          {l.lots.map((x, i) => {
-                            const o = lotOf(l, x.layerId);
-                            return (
-                              <span key={i} className="lot-row">
-                                <select value={x.layerId} aria-label={`Lot ${i + 1} for ${l.product.name}`} onChange={(e) => setLots(l.product.id, (ls) => ls.map((y, j) => (j === i ? { ...y, layerId: e.target.value } : y)))}>
-                                  {!x.layerId && <option value="">Choose lot…</option>}
-                                  {(l.lotOptions ?? []).filter((op) => op.id === x.layerId || !l.lots.some((y) => y.layerId === op.id)).map((op) => <option key={op.id} value={op.id}>{lotLabel(op)}</option>)}
-                                </select>
-                                {l.lots.length > 1 && <>
-                                  <input value={x.qty} inputMode="decimal" aria-label={`Quantity from lot ${o?.lotCode ?? i + 1}`} onChange={(e) => setLots(l.product.id, (ls) => ls.map((y, j) => (j === i ? { ...y, qty: Math.max(0, n(e.target.value)) } : y)))} />
-                                  <button type="button" className="btn-ghost" onClick={() => setLots(l.product.id, (ls) => ls.filter((_, j) => j !== i))} aria-label="Remove this lot">✕</button>
-                                </>}
+                          {l.lots.length > 0 && (
+                            <span className="lot-sum">
+                              <span className="muted">{l.lots.length > 1 ? "Lots" : "Lot"}</span>
+                              {l.lots.map((x) => {
+                                const o = lotOf(l, x.layerId);
+                                return <span key={x.layerId} className="lot-tag" title={o ? `${o.reference ?? ""} · received ${lotDay(o.receivedAt)} · ${n(o.qtyRemaining)} in this lot` : undefined}>{o?.lotCode ?? "(no lot)"}{l.lots.length > 1 ? ` × ${x.qty}` : ""}</span>;
+                              })}
+                              <span className={l.lotMode === "CHOSEN" ? "lot-chosen" : "muted"}>
+                                {l.lotMode === "CHOSEN" ? "chosen by you" : (l.lotOptions?.length ?? 0) > 1 ? "oldest first (FIFO)" : "only lot here"}
                               </span>
-                            );
-                          })}
+                            </span>
+                          )}
+                          {(l.lotOptions?.length ?? 0) > 1 && (
+                            <span>
+                              <button type="button" className="btn btn-sm" aria-expanded={l.lotOpen} onClick={() => patchLine(l.product.id, (x) => ({ ...x, lotOpen: !x.lotOpen }))}>
+                                {l.lotOpen ? "Done" : `Change lot (${l.lotOptions!.length} lots)`}
+                              </button>
+                            </span>
+                          )}
                           {issue && <span style={{ color: issue.startsWith("Loading") ? "var(--muted)" : "var(--err)" }}>{issue}</span>}
-                          {issue?.includes("short") && spare.length > 0 && (
-                            <button type="button" className="btn btn-sm" onClick={() => setLots(l.product.id, (ls) => {
-                              // Explicit split: keep what the chosen lot has, ask for another lot for the rest.
-                              const out: LotPick[] = ls.map((y) => { const op = lotOf(l, y.layerId); return op && y.qty > n(op.qtyRemaining) ? { ...y, qty: n(op.qtyRemaining) } : y; });
-                              const rest = round2(l.qty - out.reduce((a, y) => a + y.qty, 0));
-                              return [...out, { layerId: "", qty: rest }];
-                            })}>Split across another lot</button>
+                          {issue?.startsWith("Lot ") && spare.some((o) => n(o.qtyRemaining) > 0) && (
+                            <span><button type="button" className="btn btn-sm" onClick={() => fillRest(l.product.id)}>Take the rest from other lots</button></span>
                           )}
                         </span>
                       )}
@@ -393,7 +434,7 @@ export function Pos(props: Props) {
                     <span className="c-label">Qty</span>
                     {l.product.tracked ? (
                       <div className="steps"><button type="button" className="btn-sm" onClick={() => setPicker(l.product)} style={{ width: "100%" }}>{l.qty} · + IMEI</button></div>
-                    ) : l.lots.length > 1 ? (
+                    ) : l.lotMode === "CHOSEN" && l.lots.length > 1 ? (
                       <div className="steps"><span className="small muted" style={{ padding: "0 8px" }}>{l.qty} (by lot)</span></div>
                     ) : (
                     <div className="steps">
@@ -407,6 +448,27 @@ export function Pos(props: Props) {
                   <label className="c-disc"><span className="c-label">Discount</span><input value={l.discount} inputMode="decimal" placeholder="0" aria-label="Line discount" onChange={(e) => setLine(l.product.id, { discount: e.target.value })} /></label>
                   <div className="c-total num" style={{ fontWeight: 500 }}><span className="c-label">Line total</span>{fmt(lineTotal(l))}</div>
                   <div className="c-remove" />
+                  {l.lotOpen && l.lotOptions && l.lotOptions.length > 1 && (
+                    <div className="lot-panel" role="group" aria-label={`Lots of ${l.product.name}`}>
+                      <div className="lot-panel-head">
+                        <span className="small muted">Oldest lot is at the top (FIFO). Tap the lot of the item in your hand, or type how many come from each lot.</span>
+                        {l.lotMode === "CHOSEN" && <button type="button" className="btn btn-sm" onClick={() => backToFifo(l.product.id)}>Back to FIFO</button>}
+                      </div>
+                      {l.lotOptions.map((o, i) => {
+                        const pick = l.lots.find((x) => x.layerId === o.id);
+                        return (
+                          <div key={o.id} className={`lot-opt${pick ? " on" : ""}`}>
+                            <button type="button" className="lot-opt-main" aria-pressed={!!pick && l.lots.length === 1} onClick={() => chooseLot(l.product.id, o.id)}>
+                              <span><strong>{o.lotCode ?? "(no lot)"}</strong>{i === 0 && <span className="lot-oldest">oldest</span>}</span>
+                              <span className="small muted">{o.reference ? `${o.reference} · ` : ""}received {lotDay(o.receivedAt)}</span>
+                            </button>
+                            <span className="small num lot-left">{n(o.qtyRemaining)} left</span>
+                            <input value={pick?.qty ?? ""} placeholder="0" inputMode="decimal" aria-label={`Quantity from lot ${o.lotCode ?? i + 1}`} onChange={(e) => setLotQty(l.product.id, o.id, Math.max(0, n(e.target.value)))} />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               );
             })

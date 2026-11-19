@@ -379,10 +379,19 @@ table.dt { width: 100%; border-collapse: collapse; font-size: 13px; }
 
 /* POS lot choice */
 .lot-pick { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; font-size: 12.5px; }
-.lot-pick select { min-height: 34px; font-size: 12.5px; max-width: 100%; }
-.lot-row { display: flex; gap: 6px; align-items: center; }
-.lot-row select { flex: 1; min-width: 0; }
-.lot-row input { width: 64px; min-height: 34px; text-align: right; }
+.lot-sum { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; }
+.lot-tag { font-variant-numeric: tabular-nums; font-weight: 500; padding: 1px 7px; border: 1px solid var(--rule); border-radius: 4px; color: var(--ink); }
+.lot-chosen { color: var(--accent); font-weight: 500; }
+.lot-panel { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); }
+.lot-panel-head { display: flex; gap: 8px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.lot-opt { display: grid; grid-template-columns: minmax(0, 1fr) auto 72px; gap: 8px; align-items: center; padding: 4px 4px 4px 0; border-radius: 6px; }
+.lot-opt.on { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.lot-opt-main { font: inherit; text-align: left; width: 100%; box-sizing: border-box; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 1px; min-height: 44px; padding: 4px 8px; border: 1px solid var(--rule); border-radius: 6px; background: transparent; color: var(--ink); cursor: pointer; min-width: 0; }
+.lot-opt-main[aria-pressed="true"] { border-color: var(--accent); outline: 1px solid var(--accent); }
+.lot-opt-main > span { overflow-wrap: anywhere; }
+.lot-oldest { margin-left: 6px; font-size: 11px; color: var(--muted); border: 1px solid var(--rule); border-radius: 999px; padding: 0 6px; }
+.lot-left { white-space: nowrap; color: var(--muted); min-width: 56px; text-align: right; }
+.lot-opt input { min-height: 40px; text-align: right; }
 
 /* Theme switch: icon + label on desktop, icon only on phones */
 .theme-switch { gap: 6px; }
