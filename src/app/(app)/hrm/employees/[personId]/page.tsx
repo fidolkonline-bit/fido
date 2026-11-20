@@ -20,7 +20,8 @@ export default async function Employee({ params }: { params: Promise<{ personId:
   const e = person.employee;
   const [departments, designations, shifts, locations, components] = await Promise.all([
     db.department.findMany({ orderBy: { name: "asc" } }), db.designation.findMany({ orderBy: { name: "asc" } }),
-    db.shift.findMany({ where: { active: true } }), db.location.findMany({ where: { active: true } }), db.payComponent.findMany({ where: { active: true }, orderBy: { name: "asc" } }),
+    // A stopped shift still shows for someone on it, so saving the profile does not drop it.
+    db.shift.findMany({ where: { OR: [{ active: true }, ...(e?.shiftId ? [{ id: e.shiftId }] : [])] }, orderBy: { name: "asc" } }), db.location.findMany({ where: { active: true } }), db.payComponent.findMany({ where: { active: true }, orderBy: { name: "asc" } }),
   ]);
   const manage = can(user, "hr.manage");
   const pay = can(user, "hr.payroll");

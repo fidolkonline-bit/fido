@@ -104,16 +104,46 @@ export async function saveMaster(_: Res, f: FormData): Promise<Res> {
     if (kind === "department") await db.department.create({ data: { name } });
     else if (kind === "designation") await db.designation.create({ data: { name } });
     else if (kind === "leaveType") await db.leaveType.create({ data: { name, maxCount: num(f, "maxCount"), interval: str(f, "interval") ?? "NONE", paid: f.get("paid") === "on" } });
-    else if (kind === "shift") {
-      const start = str(f, "startTime"), end = str(f, "endTime");
-      if (!start || !end) throw new Error("Start and end time are required.");
-      await db.shift.create({ data: { name, startTime: start, endTime: end, graceMinutes: num(f, "graceMinutes") ?? 10, restDays: f.getAll("restDays").map(Number) } });
-    } else if (kind === "component") {
+    else if (kind === "shift") throw new Error("Use the shift form.");
+    else if (kind === "component") {
       const amount = num(f, "amount");
       if (amount == null || amount < 0) throw new Error("Amount is required.");
       await db.payComponent.create({ data: { name, kind: str(f, "componentKind") ?? "EARNING", calc: str(f, "calc") ?? "FIXED", amount } });
     } else throw new Error("Unknown setting.");
   }, `${name} added.`);
+}
+
+// Add or change a shift. A change applies to every day worked on it, past days included (late / left early /
+// auto clock-out are worked out from the shift when shown), so it is audited with the old and new values.
+export async function saveShift(_: Res, f: FormData): Promise<Res> {
+  const user = await requirePermission("hr.manage");
+  const id = str(f, "id");
+  const name = str(f, "name");
+  const startTime = str(f, "startTime"), endTime = str(f, "endTime");
+  const grace = num(f, "graceMinutes") ?? 10;
+  const hhmm = /^([01]\d|2[0-3]):[0-5]\d$/;
+  if (!name) return { error: "Name is required." };
+  if (!startTime || !endTime || !hhmm.test(startTime) || !hhmm.test(endTime)) return { error: "Start and end time are required." };
+  if (startTime === endTime) return { error: "Start and end time cannot be the same." };
+  if (!Number.isInteger(grace) || grace < 0 || grace > 240) return { error: "Grace minutes must be a whole number from 0 to 240." };
+  const data = { name, startTime, endTime, graceMinutes: grace, restDays: [...new Set(f.getAll("restDays").map(Number))].filter((d) => d >= 0 && d <= 6).sort() };
+  try {
+    if (id) {
+      const before = await db.shift.findUnique({ where: { id } });
+      if (!before) return { error: "This shift no longer exists." };
+      const after = await db.shift.update({ where: { id }, data: { ...data, active: f.get("active") === "on" } });
+      await db.auditEvent.create({ data: { actorId: user.personId, action: "SHIFT_UPDATED", subjectType: "Shift", subjectId: id, detail: { before, after } } });
+    } else {
+      const s = await db.shift.create({ data });
+      await db.auditEvent.create({ data: { actorId: user.personId, action: "SHIFT_CREATED", subjectType: "Shift", subjectId: s.id, detail: data } });
+    }
+  } catch (e) {
+    return formError(e);
+  }
+  revalidatePath("/hrm/setup");
+  revalidatePath("/hrm/attendance");
+  if (id) redirect("/hrm/setup?saved=shift#shifts");
+  return { ok: `${name} added.` };
 }
 
 export async function addHoliday(_: Res, f: FormData): Promise<Res> {
