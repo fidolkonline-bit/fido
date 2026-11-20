@@ -133,12 +133,12 @@ export const salesReports: ReportDef[] = [
     id: "RP-12", slug: "commissions", title: "Sales representative / commissions", group: "Profit & sales",
     basis: "Commission accrued on sales in the period (category pool × share), technician commission on collected repairs (share of labour), reversals from returns, and payout state. Target bonuses are in RP-35.",
     params: [
-      { key: "view", label: "View", options: [["summary", "Summary by person"], ["invoice", "Each invoice"]] },
+      { key: "view", label: "View", options: [["invoice", "Each invoice"], ["summary", "Summary by person"]] },
       { key: "person", label: "Person", options: commissionPeople },
     ],
     async run(ctx) {
       const personId = ctx.params.person && ctx.params.person !== "all" ? ctx.params.person : undefined;
-      if (ctx.params.view === "invoice") return commissionStatement({ from: ctx.from, to: ctx.to, personId, locationIds: ctx.locationIds });
+      if (ctx.params.view !== "summary") return commissionStatement({ from: ctx.from, to: ctx.to, personId, locationIds: ctx.locationIds });
       const acc = await db.commissionAccrual.findMany({ where: { createdAt: inPeriod(ctx), ...(personId ? { recipientId: personId } : {}), OR: [{ saleLine: { sale: { locationId: locIn(ctx) } } }, { repairJob: { locationId: locIn(ctx) } }] }, include: { recipient: true, settlement: true } });
       const g = groupSum(acc, (a) => `${a.recipientId}|${a.recipient.fullName}|${a.role}`, {
         basis: (a) => (D(a.amount).gt(0) ? a.basis : 0), accrued: (a) => (D(a.amount).gt(0) ? a.amount : 0), reversed: (a) => (D(a.amount).lt(0) ? a.amount : 0),

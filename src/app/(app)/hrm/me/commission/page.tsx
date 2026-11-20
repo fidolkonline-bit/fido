@@ -30,12 +30,17 @@ export default async function MyCommission({ searchParams }: { searchParams: Pro
     );
   }
   const result = await commissionStatement({ from: dayStart(from), to: new Date(dayStart(to).getTime() + 86_400_000), personId: user.personId });
+  const period = new URLSearchParams({ period: "custom", from, to }).toString();
   // Sale, return and repair pages need their own permissions, so the statement doesn't link to them here.
   result.rows = result.rows.map(({ _href: _, ...r }) => r);
   return (
     <div className="stack">
       <div className="no-print">
-        <PageHead eyebrow="HRM" title="My commission" actions={<PrintOnLoad enabled={false} label="Print" />} />
+        <PageHead eyebrow="HRM" title="My commission" actions={<>
+          <a className="btn" href={`/api/me/commission?${period}&format=pdf`}>PDF</a>
+          <a className="btn" href={`/api/me/commission?${period}&format=xlsx`}>Excel</a>
+          <PrintOnLoad enabled={false} label="Print" />
+        </>} />
         <form className="toolbar" key={`${preset}|${from}|${to}`}>
           <select name="period" defaultValue={preset} aria-label="Period" style={{ flex: "0 1 170px" }}>{PRESETS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
           <input type="date" name="from" defaultValue={from} aria-label="From" style={{ flex: "0 1 160px" }} />

@@ -64,10 +64,16 @@ export function fmtCell(v: Cell, kind?: Col["kind"], forCsv = false): string {
   return String(v);
 }
 
+// Spreadsheet columns: a column's `lead` text (e.g. the person) becomes its own column just before it.
+export function flatColumns(columns: Col[]): Col[] {
+  return columns.flatMap((c) => (c.lead ? [{ key: c.lead.key, label: c.lead.label, kind: "text" as const }, { ...c, lead: undefined }] : [c]));
+}
+
 export function toCsv(result: Result) {
   const esc = (s: string) => (/[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
-  const lines = [result.columns.map((c) => esc(c.label)).join(",")];
-  for (const r of result.rows) lines.push(result.columns.map((c) => esc(fmtCell(r[c.key], c.kind, true))).join(","));
-  if (result.totals) lines.push(result.columns.map((c, i) => esc(i === 0 ? "Total (all filtered rows)" : c.key in result.totals! ? fmtCell(result.totals![c.key], c.kind, true) : "")).join(","));
+  const cols = flatColumns(result.columns);
+  const lines = [cols.map((c) => esc(c.label)).join(",")];
+  for (const r of result.rows) lines.push(cols.map((c) => esc(fmtCell(r[c.key], c.kind, true))).join(","));
+  if (result.totals) lines.push(cols.map((c, i) => esc(i === 0 ? "Total (all filtered rows)" : c.key in result.totals! ? fmtCell(result.totals![c.key], c.kind, true) : "")).join(","));
   return "﻿" + lines.join("\r\n"); // BOM so Excel reads UTF-8 (Sinhala/Tamil names)
 }

@@ -24,7 +24,12 @@ export default async function Report({ params, searchParams }: { params: Promise
     <div className="stack">
       <div className="no-print">
         <PageHead eyebrow={`Reports / ${def.group} / ${def.id}`} title={def.title}
-          actions={<><a className="btn" href={`/api/reports/${def.slug}?${qs}`}>Export CSV</a><PrintOnLoad enabled={false} label="Print" /></>} />
+          actions={<>
+            <a className="btn" href={`/api/reports/${def.slug}?${qs}${qs ? "&" : ""}format=pdf`}>PDF</a>
+            <a className="btn" href={`/api/reports/${def.slug}?${qs}${qs ? "&" : ""}format=xlsx`}>Excel</a>
+            <a className="btn" href={`/api/reports/${def.slug}?${qs}`}>CSV</a>
+            <PrintOnLoad enabled={false} label="Print" />
+          </>} />
         {/* Keyed by the query so the dropdowns show the filters in force after following a link (defaultValue only applies on mount). */}
         <form className="toolbar" key={qs}>
           {!def.asOf && (

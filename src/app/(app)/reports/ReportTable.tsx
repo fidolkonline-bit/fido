@@ -22,7 +22,8 @@ export function ReportTable({ result }: { result: Result }) {
                   {result.columns.map((c, j) => {
                     const v = fmtCell(r[c.key], c.kind);
                     const num = c.kind && c.kind !== "text" && c.kind !== "date" && c.kind !== "datetime";
-                    return <td key={c.key} data-label={c.label} className={[num ? "num" : "", j === 0 ? "primary" : ""].join(" ").trim() || undefined}>{j === 0 && r._href ? <Link className="rowlink" href={r._href}>{v}</Link> : v}</td>;
+                    const lead = c.lead && r[c.lead.key] ? <span className="muted" style={{ display: "block", whiteSpace: "nowrap" }}>{fmtCell(r[c.lead.key])}</span> : null;
+                    return <td key={c.key} data-label={c.label} className={[num ? "num" : "", j === 0 ? "primary" : ""].join(" ").trim() || undefined}>{lead}{j === 0 && r._href ? <Link className="rowlink" href={r._href}>{v}</Link> : v}</td>;
                   })}
                 </tr>
               ))}

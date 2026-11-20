@@ -3,9 +3,12 @@ import type { CurrentUser } from "../auth";
 import type { Permission } from "../permissions";
 
 export type Cell = string | number | Prisma.Decimal | Date | null | undefined;
-export type Col = { key: string; label: string; kind?: "money" | "qty" | "date" | "datetime" | "text" | "pct"; cost?: boolean };
+// `lead` puts a text cell in front of the value in the same column (e.g. "Mr Maleesha Dilshan Rs 84.00");
+// spreadsheet exports split it into its own column, named `lead.label`.
+export type Col = { key: string; label: string; kind?: "money" | "qty" | "date" | "datetime" | "text" | "pct"; cost?: boolean; lead?: { key: string; label: string } };
 export type Row = Record<string, Cell> & { _href?: string; _tone?: "err" | "warn" | "ok" };
 export type Result = {
+  title?: string; // heading for PDF / Excel when it differs from the report's name
   columns: Col[];
   rows: Row[];
   totals?: Record<string, Cell>;

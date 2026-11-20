@@ -3,8 +3,6 @@ import { db } from "./db";
 import { D, ZERO } from "./money";
 import type { Result, Row, ParamOptions } from "./reports/types";
 
-const ROLE: Record<string, string> = { USER: "Salesperson", AGENT: "Agent", TECHNICIAN: "Technician" };
-
 // Everyone who can earn commission or has earned it: the "Person" filter of the commission report.
 export async function commissionPeople(): Promise<ParamOptions> {
   const people = await db.person.findMany({
@@ -17,21 +15,13 @@ export async function commissionPeople(): Promise<ParamOptions> {
 type Group = {
   date: Date; doc: string; href?: string; customer: string; status: string;
   total: Prisma.Decimal | null; paid: Prisma.Decimal | null;
-  personId: string; person: string; roles: Set<string>;
-  amount: Prisma.Decimal; n: number; approved: number; settled: number; returnLines: Set<string>; kind: "SALE" | "RETURN" | "REPAIR";
+  person: string; amount: Prisma.Decimal; returnLines: Set<string>; kind: "SALE" | "RETURN" | "REPAIR";
 };
 
 function payState(total: Prisma.Decimal.Value, paid: Prisma.Decimal.Value, credited: Prisma.Decimal.Value = 0) {
   const due = D(total).minus(paid).minus(credited);
   if (due.lte(0.005)) return D(credited).gt(0) && D(paid).lte(0) ? "Returned" : "Paid";
   return D(paid).gt(0) ? "Partial" : "Due";
-}
-
-function payout(g: Group) {
-  if (g.settled === g.n) return "Paid";
-  if (g.settled > 0) return "Part paid";
-  if (g.approved === g.n) return "Approved";
-  return g.approved > 0 ? "Part approved" : "Not approved";
 }
 
 /**
@@ -64,7 +54,7 @@ export async function commissionStatement(opts: { from: Date; to: Date; personId
   for (const a of acc) {
     const sale = a.saleLine?.sale;
     const ret = a.returnLineId ? retById.get(a.returnLineId) : undefined;
-    let key: string, base: Omit<Group, "personId" | "person" | "roles" | "amount" | "n" | "approved" | "settled" | "returnLines">;
+    let key: string, base: Omit<Group, "person" | "amount" | "returnLines">;
     if (sale && ret) {
       key = `R|${ret.saleReturn.id}|${a.recipientId}`;
       base = { kind: "RETURN", date: ret.saleReturn.createdAt, doc: `${ret.saleReturn.number} (return of ${sale.number})`, href: `/returns/${ret.saleReturn.id}`, customer: sale.customer?.name ?? "Walk-In Customer", status: "Return", total: ZERO, paid: null };
@@ -76,12 +66,8 @@ export async function commissionStatement(opts: { from: Date; to: Date; personId
       key = `J|${j.id}|${a.recipientId}`;
       base = { kind: "REPAIR", date: a.createdAt, doc: `Repair ${j.number}`, href: `/repairs/${j.id}`, customer: j.customer.name, status: payState(j.total, j.paid), total: D(j.total), paid: D(j.paid) };
     } else continue;
-    const g = groups.get(key) ?? { ...base, personId: a.recipientId, person: a.recipient.fullName, roles: new Set<string>(), amount: ZERO, n: 0, approved: 0, settled: 0, returnLines: new Set<string>() };
-    g.roles.add(ROLE[a.role] ?? a.role);
+    const g = groups.get(key) ?? { ...base, person: a.recipient.fullName, amount: ZERO, returnLines: new Set<string>() };
     g.amount = g.amount.plus(a.amount);
-    g.n++;
-    if (a.approvedAt) g.approved++;
-    if (a.settlementId) g.settled++;
     // A returned line can carry two reversals (salesperson + agent); count its value once per person.
     if (ret && !g.returnLines.has(ret.id)) { g.returnLines.add(ret.id); g.total = (g.total ?? ZERO).minus(ret.value); }
     groups.set(key, g);
@@ -91,33 +77,25 @@ export async function commissionStatement(opts: { from: Date; to: Date; personId
   const one = !!opts.personId;
   const rows: Row[] = list.map((g) => ({
     date: g.date, invoice: g.doc, customer: g.customer, status: g.status, total: g.total, paid: g.paid,
-    person: g.person, role: [...g.roles].join(" + "), commission: g.amount, payout: payout(g), _href: g.href,
-    _tone: g.kind === "RETURN" ? "warn" : undefined,
+    person: g.person, commission: g.amount, _href: g.href, _tone: g.kind === "RETURN" ? "warn" : undefined,
   }));
   const net = list.reduce((s, g) => s.plus(g.amount), ZERO);
-  const paidOut = acc.filter((a) => a.settlementId).reduce((s, a) => s.plus(a.amount), ZERO);
-  const docs = list.filter((g) => g.kind !== "RETURN").length;
-  const columns: Result["columns"] = [
-    { key: "date", label: "Date", kind: "datetime" }, { key: "invoice", label: "Invoice No." }, { key: "customer", label: "Customer" },
-    { key: "status", label: "Payment status" }, { key: "total", label: "Total amount", kind: "money" }, { key: "paid", label: "Total paid", kind: "money" },
-    ...(one ? [] : [{ key: "person", label: "Person" }]), { key: "role", label: "As" },
-    { key: "commission", label: "Commission", kind: "money" }, { key: "payout", label: "Payout" },
-  ];
+  const sumOf = (k: string) => rows.reduce((s, r) => s.plus(D(r[k] as Prisma.Decimal.Value)), ZERO);
+  // Same layout as the old Clicky "Sales Representative Report": one line per invoice, the person and their commission last.
   return {
-    columns, rows,
-    // Invoice totals only add up for one person: with everyone, a sale shared by a salesperson and an agent appears twice.
-    totals: { commission: net, ...(one ? { total: rows.reduce((s, r) => s.plus(D(r.total as Prisma.Decimal.Value)), ZERO), paid: rows.reduce((s, r) => s.plus(D(r.paid as Prisma.Decimal.Value)), ZERO) } : {}) },
-    summary: [
-      ...(one && list[0] ? [{ label: "Person", value: list[0].person }] : []),
-      { label: "Invoices & repairs", value: docs, kind: "qty" as const },
-      { label: "Net commission", value: net, kind: "money" as const, note: "After return reversals" },
-      { label: "Already paid out", value: paidOut, kind: "money" as const },
-      { label: "Still to pay", value: net.minus(paidOut), kind: "money" as const },
+    title: "Sales Representative Report",
+    columns: [
+      { key: "date", label: "Date", kind: "datetime" }, { key: "invoice", label: "Invoice No." }, { key: "customer", label: "Customer name" },
+      { key: "status", label: "Payment status" }, { key: "total", label: "Total amount", kind: "money" }, { key: "paid", label: "Total paid", kind: "money" },
+      { key: "commission", label: "Agent Commission", kind: "money", lead: { key: "person", label: "Agent" } },
     ],
+    rows,
+    // Invoice totals only add up for one person: with everyone, a sale shared by a salesperson and an agent appears twice.
+    totals: { commission: net, ...(one ? { total: sumOf("total"), paid: sumOf("paid") } : {}) },
     notes: [
       "Commission is earned on the invoice value when the sale is made, so unpaid (Due) invoices earn it too.",
-      "Returns appear as their own negative rows on the day the goods came back; the original invoice row is never changed.",
-      ...(one ? [] : ["Pick one person to see their invoice totals; with everyone, a sale shared by a salesperson and an agent is listed once for each."]),
+      "Returns are their own negative rows on the day the goods came back; the original invoice row never changes.",
+      ...(one ? [] : ["Pick one person to total the invoice amounts; with everyone, a sale shared by a salesperson and an agent is listed for each."]),
     ],
   };
 }
