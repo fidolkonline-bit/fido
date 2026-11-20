@@ -29,8 +29,9 @@ export type Ctx = {
 
 export type ParamOptions = [string, string][];
 // Options are fixed, or loaded when the report opens (e.g. the people who earned commission). The first option is the default.
-export type ParamDef = { key: string; label: string; options: ParamOptions | (() => Promise<ParamOptions>) };
-export type ResolvedParam = { key: string; label: string; options: ParamOptions };
+// `search` shows a type-to-search picker instead of a dropdown (long lists such as people); its first option is "none".
+export type ParamDef = { key: string; label: string; options: ParamOptions | (() => Promise<ParamOptions>); search?: boolean };
+export type ResolvedParam = { key: string; label: string; options: ParamOptions; search?: boolean };
 
 export type ReportDef = {
   id: string; // RP-01 …

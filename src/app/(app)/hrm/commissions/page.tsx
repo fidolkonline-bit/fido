@@ -8,6 +8,7 @@ import Link from "next/link";
 import type { Prisma } from "@prisma/client";
 import { PageHead, DataTable, Badge, Pager, PAGE_SIZE, pageOf } from "@/components/ui";
 import { ActionForm } from "@/components/ActionForm";
+import { SearchSelect } from "@/components/SearchSelect";
 import { SubmitButton } from "@/components/SubmitButton";
 import { approveCommissionForm, payCommissionForm } from "../actions";
 
@@ -57,11 +58,10 @@ export default async function Commissions({ searchParams }: { searchParams: Prom
     <div className="stack">
       <PageHead eyebrow="HRM" title="Commission payout" />
       <p className="small muted" style={{ margin: 0 }}>Commission accrues on each sale and is reversed by returns. Approve it up to a date (usually the last day of the month), then pay it either directly or through payroll — each commission line can be paid only once. "View statement" lists every invoice behind the amount.</p>
-      <form className="toolbar dense" role="search">
-        <select name="who" defaultValue={who} aria-label="Recipient">
-          <option value="">Everyone</option>
-          {recipients.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
-        </select>
+      <form className="toolbar dense" role="search" key={Object.values(query).join("|")}>
+        <div style={{ flex: "0 1 240px" }}>
+          <SearchSelect name="who" label="Recipient" options={recipients.map(([id, name]) => ({ id, name }))} defaultValue={who} noneLabel="Everyone" placeholder="Search person…" />
+        </div>
         <select name="type" defaultValue={type} aria-label="Recipient type">
           <option value="">Employees and agents</option>
           <option value="employee">Employees only</option>

@@ -4,6 +4,7 @@ import { reportBySlug } from "@/lib/reports";
 import { runReport } from "@/lib/reports/run";
 import { PageHead } from "@/components/ui";
 import { ReportTable } from "../ReportTable";
+import { SearchSelect } from "@/components/SearchSelect";
 import { PrintOnLoad } from "../../sales/[id]/PrintOnLoad";
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }) {
@@ -44,7 +45,12 @@ export default async function Report({ params, searchParams }: { params: Promise
               {user.locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}<option value="all">All my locations</option>
             </select>
           )}
-          {paramDefs.map((p) => <select key={p.key} name={p.key} defaultValue={ctx.params[p.key]} aria-label={p.label} style={{ flex: "0 1 190px" }}>{p.options.map(([v, l]) => <option key={v} value={v}>{p.label}: {l}</option>)}</select>)}
+          {paramDefs.map((p) => p.search ? (
+            <div key={p.key} style={{ flex: "0 1 240px" }}>
+              <SearchSelect name={p.key} label={p.label} options={p.options.slice(1).map(([id, name]) => ({ id, name }))}
+                defaultValue={ctx.params[p.key] === p.options[0][0] ? "" : ctx.params[p.key]} noneLabel={`${p.label}: ${p.options[0][1]}`} placeholder={`Search ${p.label.toLowerCase()}…`} />
+            </div>
+          ) : <select key={p.key} name={p.key} defaultValue={ctx.params[p.key]} aria-label={p.label} style={{ flex: "0 1 190px" }}>{p.options.map(([v, l]) => <option key={v} value={v}>{p.label}: {l}</option>)}</select>)}
           <button className="btn btn-primary">Run</button>
         </form>
       </div>

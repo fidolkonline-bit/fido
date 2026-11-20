@@ -134,7 +134,7 @@ export const salesReports: ReportDef[] = [
     basis: "Commission accrued on sales in the period (category pool × share), technician commission on collected repairs (share of labour), reversals from returns, and payout state. Target bonuses are in RP-35.",
     params: [
       { key: "view", label: "View", options: [["invoice", "Each invoice"], ["summary", "Summary by person"]] },
-      { key: "person", label: "Person", options: commissionPeople },
+      { key: "person", label: "Person", options: commissionPeople, search: true },
     ],
     async run(ctx) {
       const personId = ctx.params.person && ctx.params.person !== "all" ? ctx.params.person : undefined;

@@ -34,7 +34,7 @@ export async function runReport(user: CurrentUser, def: ReportDef, sp: Record<st
   const { preset, from, to } = resolvePeriod(sp);
   const permitted = user.locations.map((l) => l.id);
   const locationIds = sp.loc === "all" ? permitted : sp.loc && permitted.includes(sp.loc) ? [sp.loc] : user.location ? [user.location.id] : permitted;
-  const paramDefs: ResolvedParam[] = await Promise.all((def.params ?? []).map(async (p) => ({ key: p.key, label: p.label, options: typeof p.options === "function" ? await p.options() : p.options })));
+  const paramDefs: ResolvedParam[] = await Promise.all((def.params ?? []).map(async (p) => ({ key: p.key, label: p.label, search: p.search, options: typeof p.options === "function" ? await p.options() : p.options })));
   const params = Object.fromEntries(paramDefs.map((p) => [p.key, sp[p.key] && p.options.some(([v]) => v === sp[p.key]) ? sp[p.key]! : p.options[0][0]]));
   const ctx: Ctx = { user, from: dayStart(from), to: new Date(dayStart(to).getTime() + 86_400_000), fromYmd: from, toYmd: to, locationIds, showCost: can(user, "cost.view"), params };
   const result = await def.run(ctx);
