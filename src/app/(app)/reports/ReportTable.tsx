@@ -1,14 +1,40 @@
 import Link from "next/link";
 import { fmtCell } from "@/lib/reports/run";
-import type { Result, Row } from "@/lib/reports/types";
+import type { Result, Row, Sheet, SheetItem } from "@/lib/reports/types";
 import { Stat } from "@/components/ui";
 
 const PAGE = 200; // rows on screen; totals cover every row and the CSV has them all
 
 const toneColor = (r: Row) => (r._tone === "err" ? "var(--err)" : r._tone === "warn" ? "var(--warn)" : r._tone === "ok" ? "var(--ok)" : undefined);
 
+const rs = (v: SheetItem["value"]) => `Rs ${fmtCell(v, "money") || "0.00"}`;
+
+function SheetBox({ items }: { items: SheetItem[] }) {
+  return (
+    <div className="sheet-box">
+      <table><tbody>{items.map((i, n) => <tr key={n}><th>{i.label}{i.sub && <small>{i.sub}</small>}</th><td>{rs(i.value)}</td></tr>)}</tbody></table>
+    </div>
+  );
+}
+
+// The statement layout of the old Clicky Profit / Loss page: two boxes side by side, the results underneath.
+function SheetView({ sheet }: { sheet: Sheet }) {
+  return (
+    <div className="sheet">
+      <SheetBox items={sheet.left} />
+      <SheetBox items={sheet.right} />
+      {sheet.results.length > 0 && (
+        <div className="sheet-box sheet-results">
+          {sheet.results.map((r) => <div key={r.label}><p className="sheet-result">{r.label}: {rs(r.value)}</p><p>{r.note}</p></div>)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Summary tiles, the table with its totals row, and the notes of a report result. Shared by Reports and "My commission".
 export function ReportTable({ result }: { result: Result }) {
+  if (result.sheet) return <><SheetView sheet={result.sheet} />{result.notes?.map((n) => <p key={n} className="small muted" style={{ margin: 0 }}>{n}</p>)}</>;
   return (
     <>
       {result.summary && <div className="stats">{result.summary.map((s) => <Stat key={s.label} label={s.label} value={fmtCell(s.value, s.kind) || "—"} basis={s.note} />)}</div>}

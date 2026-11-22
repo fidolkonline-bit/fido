@@ -1,72 +1,18 @@
 import { db } from "../db";
-import type { PayLine } from "../payroll";
 import type { ReportDef, Row } from "./types";
 import { D, ZERO, sum, inPeriod, locIn, totalsOf, groupSum } from "./util";
 import { channelLabel } from "../sale-channels";
 import { commissionPeople, commissionStatement } from "../commission-statement";
+import { profitLoss, profitBy, PROFIT_TABS } from "./profit-loss";
 
 const saleWhere = (ctx: Parameters<ReportDef["run"]>[0]) => ({ stage: "FINAL", soldAt: inPeriod(ctx), locationId: locIn(ctx) });
 
 export const salesReports: ReportDef[] = [
   {
     id: "RP-01", slug: "profit-loss", title: "Profit / Loss", group: "Profit & sales",
-    basis: "Invoice (accrual) basis: sales and costs by document date in Asia/Colombo; collections are a separate cash view.",
-    async run(ctx) {
-      const sw = saleWhere(ctx);
-      const [sales, lineCost, returns, retCost, writeOffRet, expenses, adjLines, claims, repairs, accruals, targets, slips] = await Promise.all([
-        db.sale.aggregate({ where: sw, _sum: { subtotal: true, discount: true, rounding: true } }),
-        db.saleLine.aggregate({ where: { sale: sw }, _sum: { costTotal: true } }),
-        db.saleReturn.aggregate({ where: { createdAt: inPeriod(ctx), locationId: locIn(ctx) }, _sum: { totalValue: true } }),
-        db.saleReturnLine.aggregate({ where: { saleReturn: { createdAt: inPeriod(ctx), locationId: locIn(ctx) } }, _sum: { costValue: true } }),
-        db.saleReturnLine.aggregate({ where: { disposition: "WRITTEN_OFF", saleReturn: { createdAt: inPeriod(ctx), locationId: locIn(ctx) } }, _sum: { costValue: true } }),
-        db.expense.aggregate({ where: { expenseDate: inPeriod(ctx), locationId: locIn(ctx) }, _sum: { amount: true } }),
-        db.stockAdjustmentLine.findMany({ where: { qty: { lt: 0 }, adjustment: { createdAt: inPeriod(ctx), locationId: locIn(ctx) } }, select: { qty: true, unitCost: true } }),
-        db.supplierClaim.aggregate({ where: { status: "SETTLED", settledAt: inPeriod(ctx), locationId: locIn(ctx) }, _sum: { lossValue: true } }),
-        db.repairJob.findMany({ where: { status: "COLLECTED", collectedAt: inPeriod(ctx), locationId: locIn(ctx) }, include: { parts: true } }),
-        db.commissionAccrual.aggregate({ where: { createdAt: inPeriod(ctx), OR: [{ saleLine: { sale: { locationId: locIn(ctx) } } }, { repairJob: { locationId: locIn(ctx) } }] }, _sum: { amount: true } }),
-        db.salesTarget.findMany({ where: { approvedAt: inPeriod(ctx) } }),
-        db.payslip.findMany({ where: { run: { status: { in: ["APPROVED", "PART_PAID", "PAID"] }, periodEnd: { gte: new Date(`${ctx.fromYmd}T00:00:00Z`), lte: new Date(`${ctx.toYmd}T00:00:00Z`) } } } }),
-      ]);
-      const gross = D(sales._sum.subtotal).minus(D(sales._sum.discount));
-      const netSales = gross.minus(D(returns._sum.totalValue));
-      const cogs = D(lineCost._sum.costTotal).minus(D(retCost._sum.costValue));
-      const grossProfit = netSales.minus(cogs);
-      const repairIncome = sum(repairs, (r) => r.total);
-      const repairCost = repairs.reduce((a, r) => a.plus(sum(r.parts, (p) => p.costTotal)).plus(r.externalCost), ZERO);
-      const wastage = adjLines.reduce((a, l) => a.plus(D(l.qty).neg().mul(l.unitCost)), ZERO).plus(D(writeOffRet._sum.costValue));
-      const claimLoss = D(claims._sum.lossValue);
-      const commission = D(accruals._sum.amount);
-      const targetBonus = targets.reduce((a, t) => a.plus(D((t.snapshot as { earning?: string } | null)?.earning)), ZERO);
-      // Payroll counts salaries/allowances only: commission and target lines were already expensed when earned.
-      const payroll = slips.reduce((a, p) => a.plus(p.gross).minus(sum((p.lines as PayLine[]).filter((l) => l.source === "COMMISSION" || l.source === "TARGET"), (l) => l.amount)), ZERO);
-      const expenses2 = D(expenses._sum.amount);
-      const net = grossProfit.plus(repairIncome).minus(repairCost).minus(expenses2).minus(payroll).minus(commission).minus(targetBonus).minus(wastage).minus(claimLoss);
-      const rows: Row[] = [
-        { item: "Sales (after line and invoice discounts)", amount: gross },
-        { item: "− Sell returns / credit notes", amount: D(returns._sum.totalValue).neg() },
-        { item: "= Net sales", amount: netSales, _tone: "ok" },
-        { item: "− Cost of goods sold (original lot cost, less returns)", amount: cogs.neg() },
-        { item: "= Gross profit", amount: grossProfit, _tone: "ok" },
-        { item: "+ Repair income (jobs collected)", amount: repairIncome },
-        { item: "− Repair parts and outside-repair cost", amount: repairCost.neg() },
-        { item: "− Expenses (excl. tax)", amount: expenses2.neg() },
-        { item: "− Payroll (salaries, allowances, deductions excluded)", amount: payroll.neg() },
-        { item: "− Sales commission earned (net of return reversals)", amount: commission.neg() },
-        { item: "− Sales target bonuses approved", amount: targetBonus.neg() },
-        { item: "− Wastage / write-offs at original cost", amount: wastage.neg() },
-        { item: "− Supplier recovery losses (settled claims)", amount: claimLoss.neg() },
-        { item: "= Net operating result", amount: net, _tone: net.lt(0) ? "err" : "ok" },
-      ];
-      return {
-        columns: [{ key: "item", label: "Line" }, { key: "amount", label: "Amount", kind: "money" }],
-        rows: ctx.showCost ? rows : rows.filter((r) => !String(r.item).includes("Cost of goods") && !String(r.item).startsWith("= Gross") && !String(r.item).startsWith("= Net operating")),
-        notes: [
-          "Rounding on invoices is excluded from sales. Reload sales are included at face value with the provider rate as cost.",
-          "Payroll, commission and target bonuses are business-wide; they are not split by location.",
-          "Commission and target bonuses are counted when earned/approved; paying them later (directly or in payroll) is not counted again.",
-        ],
-      };
-    },
+    basis: "Same layout and formula as the old Clicky Profit / Loss report. Invoice (accrual) basis by document date in Asia/Colombo; stock values from the stock ledger at the start and end of the period.",
+    run: profitLoss,
+    breakdown: { tabs: PROFIT_TABS, run: profitBy },
   },
   {
     id: "RP-02", slug: "profit-breakdown", title: "Profit breakdowns", group: "Profit & sales",

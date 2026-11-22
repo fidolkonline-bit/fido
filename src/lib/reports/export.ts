@@ -4,7 +4,7 @@ import { jsPDF } from "jspdf";
 import { autoTable } from "jspdf-autotable";
 import { Prisma } from "@prisma/client";
 import { fmtCell, flatColumns } from "./run";
-import type { Cell, Col, Result } from "./types";
+import type { Cell, Col, Result, Sheet, SheetItem } from "./types";
 
 // What every exported report says about itself, above the table.
 export type ExportMeta = {
@@ -29,6 +29,7 @@ function excelValue(v: Cell, kind: Col["kind"]): ExcelJS.CellValue {
 }
 
 export async function reportXlsx(result: Result, meta: ExportMeta) {
+  if (result.sheet) return sheetXlsx(result.sheet, meta);
   const cols = flatColumns(result.columns);
   const wb = new ExcelJS.Workbook();
   wb.created = new Date();
@@ -87,6 +88,7 @@ function pdfText(v: Cell, kind: Col["kind"]) {
 }
 
 export function reportPdf(result: Result, meta: ExportMeta) {
+  if (result.sheet) return sheetPdf(result.sheet, meta);
   const cols = result.columns;
   const doc = new jsPDF({ orientation: cols.length > 8 ? "landscape" : "portrait", unit: "mm", format: "a4" });
   const pageW = doc.internal.pageSize.getWidth(), pageH = doc.internal.pageSize.getHeight();
@@ -138,6 +140,105 @@ export function reportPdf(result: Result, meta: ExportMeta) {
       doc.setTextColor(0);
     },
   });
+  return Buffer.from(doc.output("arraybuffer"));
+}
+
+// ───────────── Statement layout (Profit / Loss as the old Clicky page) ─────────────
+
+const MONEY_FMT = '"Rs "#,##0.00;[Red]-"Rs "#,##0.00';
+const rs = (v: Cell) => { const s = fmtCell(v ?? 0, "money") || "0.00"; return s.startsWith("-") ? `-Rs ${s.slice(1)}` : `Rs ${s}`; };
+
+async function sheetXlsx(sheet: Sheet, meta: ExportMeta) {
+  const wb = new ExcelJS.Workbook();
+  wb.created = new Date();
+  const ws = wb.addWorksheet("Profit Loss", { pageSetup: { orientation: "portrait", fitToPage: true, fitToWidth: 1, fitToHeight: 0 }, views: [{ showGridLines: false }] });
+  ws.columns = [{ width: 34 }, { width: 18 }, { width: 4 }, { width: 34 }, { width: 18 }];
+  ws.addRow([meta.title]).font = { size: 18 };
+  for (const l of meta.lines) ws.addRow([l]).font = { size: 9, color: { argb: "FF666666" } };
+  ws.addRow([]);
+
+  const thin = { style: "thin" as const, color: { argb: "FFE3E3E3" } };
+  const label = (i: SheetItem): ExcelJS.CellValue => (i.sub
+    ? { richText: [{ text: `${i.label}\n`, font: { bold: true, size: 11 } }, { text: i.sub, font: { bold: true, size: 8 } }] }
+    : i.label);
+  const n = Math.max(sheet.left.length, sheet.right.length);
+  for (let k = 0; k < n; k++) {
+    const a = sheet.left[k], b = sheet.right[k];
+    const row = ws.addRow([a ? label(a) : null, a ? excelValue(a.value ?? 0, "money") : null, null, b ? label(b) : null, b ? excelValue(b.value ?? 0, "money") : null]);
+    row.alignment = { vertical: "top", wrapText: true };
+    if (a?.sub || b?.sub) row.height = 30;
+    for (const [c, item] of [[1, a], [2, a], [4, b], [5, b]] as const) {
+      if (!item) continue;
+      const cell = row.getCell(c);
+      if (c === 1 || c === 4) cell.font = { bold: true };
+      else cell.numFmt = MONEY_FMT;
+      if (k > 0) cell.border = { top: thin };
+    }
+  }
+
+  if (sheet.results.length) ws.addRow([]);
+  for (const r of sheet.results) {
+    ws.addRow([]);
+    const head = ws.addRow([`${r.label}:`, excelValue(r.value ?? 0, "money")]);
+    head.font = { size: 16 };
+    head.getCell(2).numFmt = MONEY_FMT;
+    const note = ws.addRow([r.note]);
+    ws.mergeCells(note.number, 1, note.number, 5);
+    note.font = { size: 8 };
+    note.alignment = { wrapText: true, vertical: "top" };
+    note.height = r.note.length > 120 ? 48 : 14;
+  }
+  return Buffer.from(await wb.xlsx.writeBuffer());
+}
+
+function sheetPdf(sheet: Sheet, meta: ExportMeta) {
+  const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+  const pageW = doc.internal.pageSize.getWidth(), pageH = doc.internal.pageSize.getHeight();
+  const M = 13, GAP = 6, boxW = (pageW - 2 * M - GAP) / 2, PAD = 5;
+
+  doc.setFont("helvetica", "normal").setFontSize(20).text(latin(meta.title), M, 22);
+  doc.setFontSize(8).setTextColor(110);
+  meta.lines.forEach((l, i) => doc.text(latin(l), M, 28 + i * 4));
+  doc.setTextColor(0);
+  const top = 30 + meta.lines.length * 4;
+
+  const rowH = (i: SheetItem) => (i.sub ? 10.5 : 7.8);
+  const boxH = (items: SheetItem[]) => items.reduce((a, i) => a + rowH(i), 0) + 2 * PAD;
+  const box = (x: number, y: number, w: number, h: number) => {
+    doc.setDrawColor(236).setLineWidth(0.6).rect(x + 0.4, y + 0.6, w, h); // soft edge, like the page's card shadow
+    doc.setDrawColor(226).setLineWidth(0.2).setFillColor(255, 255, 255).rect(x, y, w, h, "FD");
+  };
+  const drawBox = (items: SheetItem[], x: number) => {
+    box(x, top, boxW, boxH(items));
+    let y = top + PAD;
+    items.forEach((i, k) => {
+      if (k > 0) doc.setDrawColor(232).setLineWidth(0.2).line(x + PAD, y, x + boxW - PAD, y);
+      doc.setFont("helvetica", "bold").setFontSize(8.2).text(latin(i.label), x + PAD, y + 5);
+      if (i.sub) doc.setFontSize(6.4).text(latin(i.sub), x + PAD, y + 8.6);
+      doc.setFont("helvetica", "normal").setFontSize(8.2).text(rs(i.value), x + boxW * 0.63, y + 5);
+      y += rowH(i);
+    });
+  };
+  drawBox(sheet.left, M);
+  drawBox(sheet.right, M + boxW + GAP);
+
+  if (sheet.results.length) {
+    const fullW = pageW - 2 * M;
+    // Keep the note's own line breaks (the formula starts its "- ( … )" part on a new line, as on the old page).
+    const notes = sheet.results.map((r) => r.note.split("\n").flatMap((part) => doc.setFontSize(6.8).splitTextToSize(latin(part), fullW - 2 * PAD - 4) as string[]));
+    const h = sheet.results.reduce((a, _r, k) => a + 12 + notes[k].length * 3, 0) + 2 * PAD + 4;
+    const y0 = top + Math.max(boxH(sheet.left), boxH(sheet.right)) + 10;
+    box(M, y0, fullW, h);
+    let y = y0 + PAD + 9;
+    sheet.results.forEach((r, k) => {
+      doc.setFont("helvetica", "normal").setFontSize(17).text(`${r.label}: ${rs(r.value)}`, M + PAD + 2, y);
+      doc.setFontSize(6.8).text(notes[k], M + PAD + 2, y + 4.5);
+      y += 12 + notes[k].length * 3;
+    });
+  }
+
+  doc.setFontSize(7).setTextColor(130);
+  doc.text("Page 1 of 1", pageW - M, pageH - 8, { align: "right" });
   return Buffer.from(doc.output("arraybuffer"));
 }
 

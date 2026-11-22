@@ -37,7 +37,10 @@ export async function runReport(user: CurrentUser, def: ReportDef, sp: Record<st
   const paramDefs: ResolvedParam[] = await Promise.all((def.params ?? []).map(async (p) => ({ key: p.key, label: p.label, search: p.search, options: typeof p.options === "function" ? await p.options() : p.options })));
   const params = Object.fromEntries(paramDefs.map((p) => [p.key, sp[p.key] && p.options.some(([v]) => v === sp[p.key]) ? sp[p.key]! : p.options[0][0]]));
   const ctx: Ctx = { user, from: dayStart(from), to: new Date(dayStart(to).getTime() + 86_400_000), fromYmd: from, toYmd: to, locationIds, showCost: can(user, "cost.view"), params };
-  const result = await def.run(ctx);
+  // Breakdown tabs (profit by product …) are all profit, so they need cost access; they run alongside the main result.
+  const by = def.breakdown && ctx.showCost ? (def.breakdown.tabs.find(([k]) => k === sp.by)?.[0] ?? def.breakdown.tabs[0][0]) : null;
+  const [result, breakdownResult] = await Promise.all([def.run(ctx), by ? def.breakdown!.run(ctx, by) : null]);
+  const breakdown = by && breakdownResult ? { by, tabs: def.breakdown!.tabs, result: breakdownResult } : null;
   // Hidden cost fields never leave the server, on screen or in exports (spec §17).
   if (!ctx.showCost) {
     const hidden = new Set(result.columns.filter((c) => c.cost).map((c) => c.key));
@@ -45,7 +48,7 @@ export async function runReport(user: CurrentUser, def: ReportDef, sp: Record<st
     result.rows = result.rows.map((r) => Object.fromEntries(Object.entries(r).filter(([k]) => !hidden.has(k))) as typeof r);
     if (result.totals) result.totals = Object.fromEntries(Object.entries(result.totals).filter(([k]) => !hidden.has(k)));
   }
-  return { result, ctx, preset, paramDefs, scope: sp.loc === "all" ? "All permitted locations" : user.locations.find((l) => l.id === locationIds[0])?.name ?? "" };
+  return { result, breakdown, ctx, preset, paramDefs, scope: sp.loc === "all" ? "All permitted locations" : user.locations.find((l) => l.id === locationIds[0])?.name ?? "" };
 }
 
 export function fmtCell(v: Cell, kind?: Col["kind"], forCsv = false): string {
@@ -76,4 +79,12 @@ export function toCsv(result: Result) {
   for (const r of result.rows) lines.push(cols.map((c) => esc(fmtCell(r[c.key], c.kind, true))).join(","));
   if (result.totals) lines.push(cols.map((c, i) => esc(i === 0 ? "Total (all filtered rows)" : c.key in result.totals! ? fmtCell(result.totals![c.key], c.kind, true) : "")).join(","));
   return "﻿" + lines.join("\r\n"); // BOM so Excel reads UTF-8 (Sinhala/Tamil names)
+}
+
+// Only the columns the person chose to see ("Column visibility"); the first column always stays.
+export function withColumns(result: Result, keys: string | undefined): Result {
+  if (!keys) return result;
+  const want = new Set(keys.split(","));
+  const columns = result.columns.filter((c, i) => i === 0 || want.has(c.key));
+  return columns.length > 1 ? { ...result, columns } : result;
 }

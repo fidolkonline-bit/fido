@@ -102,6 +102,32 @@ input[type="checkbox"], input[type="radio"] { width: 18px; height: 18px; min-hei
 .stat { font-size: 12px; color: var(--muted); }
 .stat strong { display: block; font-size: 22px; font-weight: 500; color: var(--ink); margin: 3px 0; font-variant-numeric: tabular-nums; }
 
+/* Statement layout (Profit / Loss in the old Clicky format): two boxes of label / amount, then the results box. */
+.sheet { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; align-items: start; }
+.sheet-box { background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius); padding: 14px 20px; }
+.sheet-box table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.sheet-box th { text-align: left; font-weight: 700; padding: 9px 12px 9px 0; border-top: 1px solid var(--rule); vertical-align: top; width: 58%; }
+.sheet-box th small { display: block; font-size: 11px; font-weight: 700; margin-top: 2px; }
+.sheet-box td { padding: 9px 0; border-top: 1px solid var(--rule); vertical-align: top; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sheet-box tr:first-child th, .sheet-box tr:first-child td { border-top: 0; }
+.sheet-results { grid-column: 1 / -1; padding: 22px 20px; }
+.sheet-result { font-size: 24px; font-weight: 400; margin: 0; }
+.sheet-result + p { font-size: 11px; margin: 2px 0 18px; white-space: pre-line; }
+.sheet-results > div:last-child p:last-child { margin-bottom: 0; }
+@media (max-width: 760px) { .sheet { grid-template-columns: minmax(0, 1fr); gap: 14px; } .sheet-result { font-size: 20px; } }
+
+/* Profit by … tabs under the Profit / Loss statement (sortable, searchable, chosen columns). */
+.breakdown { margin-top: 8px; }
+.btn-group { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.colmenu { position: relative; display: inline-flex; }
+.colmenu-list { position: absolute; top: calc(100% + 4px); left: 0; z-index: 20; display: grid; gap: 6px; min-width: 190px; padding: 10px 12px;
+  background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius); box-shadow: 0 6px 18px rgba(0,0,0,0.15); font-size: 13px; }
+.colmenu-list label { display: flex; align-items: center; justify-content: flex-start; gap: 8px; white-space: nowrap; cursor: pointer; text-align: left; margin: 0; }
+.colmenu-list input { width: auto; min-height: 0; margin: 0; flex: 0 0 auto; }
+.sortbtn { all: unset; cursor: pointer; font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit; }
+.sortbtn span { opacity: 0.5; font-size: 10px; }
+.print-only { display: none; }
+
 /* Tables: dense on desktop, stacked label/value cards on phones (no tiny-font workaround). */
 .tablewrap { background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius); overflow-x: auto; }
 table.dt { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -361,6 +387,9 @@ table.dt { width: 100%; border-collapse: collapse; font-size: 13px; }
   .label { border: 0; }
   .label-controls { display: none !important; }
   .topbar, .sidebar, .bottombar, .no-print { display: none !important; }
+  /* "Print" on a Profit by … tab prints only that table. */
+  body.print-breakdown .report-page > :not(.breakdown) { display: none !important; }
+  body.print-breakdown .print-only { display: block; }
   .shell { display: block; }
   .main { padding: 0; }
   body { background: #fff; color: #000; }

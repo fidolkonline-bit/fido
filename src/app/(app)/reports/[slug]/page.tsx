@@ -4,6 +4,8 @@ import { reportBySlug } from "@/lib/reports";
 import { runReport } from "@/lib/reports/run";
 import { PageHead } from "@/components/ui";
 import { ReportTable } from "../ReportTable";
+import { BreakdownTable, type PlainRow } from "../BreakdownTable";
+import type { Cell, Row } from "@/lib/reports/types";
 import { SearchSelect } from "@/components/SearchSelect";
 import { PrintOnLoad } from "../../sales/[id]/PrintOnLoad";
 
@@ -18,11 +20,13 @@ export default async function Report({ params, searchParams }: { params: Promise
   const def = reportBySlug((await params).slug);
   if (!def) notFound();
   const sp = await searchParams;
-  const { result, ctx, preset, paramDefs, scope } = await runReport(user, def, sp);
+  const { result, breakdown, ctx, preset, paramDefs, scope } = await runReport(user, def, sp);
   const qs = new URLSearchParams(Object.entries(sp).filter(([, v]) => v != null) as [string, string][]).toString();
+  // The filters in force, without the open tab: tab links and tab exports add their own.
+  const baseQs = new URLSearchParams(Object.entries(sp).filter(([k, v]) => v != null && k !== "by") as [string, string][]).toString();
 
   return (
-    <div className="stack">
+    <div className="stack report-page">
       <div className="no-print">
         <PageHead eyebrow={`Reports / ${def.group} / ${def.id}`} title={def.title}
           actions={<>
@@ -59,6 +63,21 @@ export default async function Report({ params, searchParams }: { params: Promise
         <span className="muted"> Generated {new Date().toLocaleString("en-GB", { timeZone: "Asia/Colombo" })} by {user.name}.</span>
       </p>
       <ReportTable result={result} />
+      {breakdown && (
+        <BreakdownTable tabs={breakdown.tabs} active={breakdown.by} query={baseQs} exportUrl={`/api/reports/${def.slug}?${baseQs}`}
+          columns={breakdown.result.columns.map(({ key, label, kind }) => ({ key, label, kind }))} rows={breakdown.result.rows.map(plain)} notes={breakdown.result.notes} />
+      )}
     </div>
   );
+}
+
+// Decimals and dates as plain numbers / YYYY-MM-DD so the table can sort and search them in the browser.
+function plainCell(v: Cell): string | number | null {
+  if (v == null) return null;
+  if (v instanceof Date) return v.toISOString().slice(0, 10);
+  if (typeof v === "number" || typeof v === "string") return v;
+  return Number(v.toString());
+}
+function plain(r: Row): PlainRow {
+  return Object.fromEntries(Object.entries(r).map(([k, v]) => [k, k === "_tone" ? null : plainCell(v as Cell)])) as PlainRow;
 }
