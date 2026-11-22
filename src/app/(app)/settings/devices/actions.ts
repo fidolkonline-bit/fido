@@ -30,7 +30,7 @@ export async function unregisterDeviceForm(_: FormState, f: FormData): Promise<F
 export async function saveAttendance(_: FormState, f: FormData): Promise<FormState> {
   const user = await requirePermission("settings.manage");
   try {
-    const v = await saveAttendanceSettings(user, { dayCutoff: str(f, "dayCutoff") ?? "", autoClockIn: f.get("autoClockIn") === "on", requireDrawerClose: f.get("requireDrawerClose") === "on" });
+    const v = await saveAttendanceSettings(user, { dayCutoff: str(f, "dayCutoff") ?? "", autoClockIn: f.get("autoClockIn") === "on", requireDrawerClose: f.get("requireDrawerClose") === "on", notifyClock: f.get("notifyClock") === "on" });
     revalidatePath("/settings/devices");
     return { ok: `Saved. New sign-ins on shop devices end at ${v.dayCutoff}${v.autoClockIn ? " and clock employees in" : ""}.` };
   } catch (e) {

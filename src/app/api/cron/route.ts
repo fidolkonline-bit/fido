@@ -20,8 +20,8 @@ export async function GET(req: Request) {
   const [sms, pushes] = await Promise.all([dispatchSms(50), dispatchTaskPushes()]);
   // After the nightly cutoff: forgotten clock-outs are closed (flagged for review) and open drawers reported.
   const attendance = await nightlyAttendance();
-  // Housekeeping (cheap, safe to repeat): old error-log rows and sign-in tries are dropped after 90 days.
+  // Housekeeping (cheap, safe to repeat): old error-log rows, sign-in tries and notifications are dropped after 90 days.
   const old = new Date(Date.now() - 90 * 86_400_000);
-  await Promise.all([db.errorLog.deleteMany({ where: { createdAt: { lt: old } } }), db.loginAttempt.deleteMany({ where: { createdAt: { lt: old } } })]);
+  await Promise.all([db.errorLog.deleteMany({ where: { createdAt: { lt: old } } }), db.loginAttempt.deleteMany({ where: { createdAt: { lt: old } } }), db.notification.deleteMany({ where: { createdAt: { lt: old } } })]);
   return NextResponse.json({ reminders, escalated, expenses, subscriptions, instalments, sms, pushes, attendance });
 }

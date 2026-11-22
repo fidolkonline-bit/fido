@@ -6,6 +6,7 @@ import { D, ZERO } from "./money";
 import { seal, unseal } from "./vault";
 import type { CurrentUser } from "./auth";
 import { getAttendanceSettings } from "./shop-device";
+import { notifyPeople } from "./notify";
 
 export class HrError extends Error {}
 
@@ -178,12 +179,43 @@ export async function selfClock(user: CurrentUser, kind: "IN" | "OUT", ip: strin
   if (last?.kind === kind && Date.now() - last.at.getTime() < 16 * 3_600_000)
     throw new HrError(kind === "IN" ? "You are already clocked in." : "You are already clocked out.");
   // Server time is authoritative; the phone's clock is never trusted.
-  return db.clockEvent.create({
+  const ev = await db.clockEvent.create({
     data: {
       employeeId: emp.id, kind, at: new Date(), source: "SELF", locationId: user.device?.locationId ?? user.location?.id ?? null,
       deviceId: user.device?.id ?? null, ip: ip?.slice(0, 64) ?? null, sessionId: user.sessionId,
     },
   });
+  await announceClock(ev.id, kind === "OUT" && last?.kind === "IN" ? { workedFrom: last.at } : {});
+  return ev;
+}
+
+const hm = (mins: number) => `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, "0")}m`;
+
+// Tell owners and managers that someone clocked in or out (setting "notifyClock"). `extra` adds the end-of-day summary.
+export async function announceClock(eventId: string, o: { workedFrom?: Date; minutes?: number; extra?: string } = {}) {
+  try {
+    if (!(await getAttendanceSettings()).notifyClock) return;
+    const e = await db.clockEvent.findUnique({ where: { id: eventId }, include: { employee: { include: { person: true, shift: true } }, device: true, location: true } });
+    if (!e) return;
+    const t = e.at.toLocaleTimeString("en-GB", { timeZone: "Asia/Colombo", hour: "2-digit", minute: "2-digit" });
+    const where = e.device?.name ?? e.location?.name ?? "phone";
+    const name = e.employee.person.fullName;
+    const parts = [where];
+    if (e.kind === "IN" && e.employee.shift) {
+      const [sh, sm] = e.employee.shift.startTime.split(":").map(Number);
+      const lateBy = Math.round((e.at.getTime() - (dayStart(ymd(e.at)).getTime() + (sh * 60 + sm) * 60_000)) / 60_000);
+      parts.push(lateBy > e.employee.shift.graceMinutes ? `${lateBy >= 60 ? hm(lateBy) : `${lateBy} min`} late` : "on time");
+    }
+    const minutes = o.minutes ?? (o.workedFrom ? Math.round((e.at.getTime() - o.workedFrom.getTime()) / 60_000) : null);
+    if (e.kind === "OUT" && minutes != null) parts.push(`${hm(minutes)} worked`);
+    if (o.extra) parts.push(o.extra);
+    await notifyPeople("attendance.manage", {
+      kind: e.kind === "IN" ? "CLOCK_IN" : "CLOCK_OUT", title: `${name} clocked ${e.kind === "IN" ? "in" : "out"} · ${t}`, body: parts.join(" · "),
+      url: `/hrm/attendance?day=${ymd(e.at)}&emp=${e.employeeId}`, tag: `clock-${e.employeeId}`, exceptPersonId: e.employee.personId,
+    });
+  } catch (err) {
+    console.error("clock notification failed", err);
+  }
 }
 
 // A sign-in on a shop device clocks the person in, unless they are already on the clock or this is switched off.
@@ -193,7 +225,7 @@ export async function clockInOnSignIn(s: { personId: string; sessionId: string; 
     if (!(await getAttendanceSettings()).autoClockIn) return null;
     const emp = await db.employeeProfile.findUnique({ where: { personId: s.personId } });
     if (!emp || emp.status !== "ACTIVE") return null;
-    return await posting(async (tx) => {
+    const ev = await posting(async (tx) => {
       // Two sign-ins at once (two tabs) must not make two clock-ins.
       await tx.$queryRaw`SELECT id FROM "EmployeeProfile" WHERE id = ${emp.id} FOR UPDATE`;
       const last = await tx.clockEvent.findFirst({ where: { employeeId: emp.id, voidedAt: null }, orderBy: { at: "desc" } });
@@ -202,6 +234,8 @@ export async function clockInOnSignIn(s: { personId: string; sessionId: string; 
         data: { employeeId: emp.id, kind: "IN", at: new Date(), source: "LOGIN", locationId: s.locationId, deviceId: s.deviceId, ip: s.ip?.slice(0, 64) ?? null, sessionId: s.sessionId },
       });
     });
+    if (ev) await announceClock(ev.id);
+    return ev;
   } catch (e) {
     console.error("clock-in on sign-in failed", e);
     return null;

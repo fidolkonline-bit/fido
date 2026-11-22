@@ -416,6 +416,32 @@ async function main() {
     await db.registerSession.update({ where: { id: reg.id }, data: { closedAt: new Date() } });
   });
 
+  await step("owners get a bell notification for clock-in and End my day; never for their own clock-in; switchable", async () => {
+    const device = await db.shopDevice.create({ data: { name: "Bell till", locationId: loc.id, tokenHash: randomUUID(), registeredById: acct.personId } });
+    const person = await db.person.create({ data: { fullName: `Bell ${randomUUID().slice(0, 6)}` } });
+    await db.employeeProfile.create({ data: { personId: person.id, joinedOn: new Date("2026-01-01") } });
+    const mine = (kind: string) => db.notification.findMany({ where: { personId: acct.personId, kind, title: { startsWith: person.fullName } } });
+    await clockInOnSignIn({ personId: person.id, sessionId: "bell-in", deviceId: device.id, locationId: loc.id, ip: null });
+    const ins = await mine("CLOCK_IN");
+    assert.equal(ins.length, 1);
+    assert.match(ins[0].body, /Bell till/);
+    assert.equal(ins[0].readAt, null);
+    assert.equal(await db.notification.count({ where: { personId: person.id } }), 0, "not told about their own clock-in");
+
+    const u: CurrentUser = { ...owner, personId: person.id, name: person.fullName, sessionId: "bell-end", permissions: new Set(["register.operate"]), device: { id: device.id, name: device.name, locationId: loc.id } };
+    if (await db.registerSession.findFirst({ where: { locationId: loc.id, closedAt: null } })) await db.registerSession.updateMany({ where: { locationId: loc.id, closedAt: null }, data: { closedAt: new Date() } });
+    await endDay(u, null);
+    const outs = await mine("CLOCK_OUT");
+    assert.equal(outs.length, 1);
+    assert.match(outs[0].body, /worked/);
+    assert.match(outs[0].body, /sales/);
+
+    await db.appSetting.upsert({ where: { key: "attendance" }, create: { key: "attendance", value: { notifyClock: false } }, update: { value: { notifyClock: false } } });
+    await clockInOnSignIn({ personId: person.id, sessionId: "bell-in-2", deviceId: device.id, locationId: loc.id, ip: null });
+    assert.equal((await mine("CLOCK_IN")).length, 1, "switched off: no new notification");
+    await db.appSetting.delete({ where: { key: "attendance" } });
+  });
+
   console.log("\nAll integration flows passed.");
 }
 

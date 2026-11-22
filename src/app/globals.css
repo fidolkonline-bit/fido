@@ -424,3 +424,17 @@ table.dt { width: 100%; border-collapse: collapse; font-size: 13px; }
 .searchselect-opt[aria-selected="true"] { font-weight: 600; }
 .searchselect-opt mark { background: transparent; color: var(--accent); font-weight: 600; }
 .searchselect-empty { padding: 9px 10px; font-size: 13px; color: var(--muted); }
+
+/* Notification bell (top bar) and the notifications list */
+.bell { position: relative; padding-left: 10px; padding-right: 10px; }
+.bell-count {
+  position: absolute; top: -6px; right: -6px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+  background: var(--accent); color: var(--accent-ink); font-size: 11px; font-weight: 700; line-height: 18px; text-align: center;
+}
+.notif-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--rule); }
+.notif-list li { border-bottom: 1px solid var(--rule); }
+.notif-list a { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; color: inherit; text-decoration: none; }
+.notif-list a:hover { background: var(--wash); }
+.notif-list li:not(.unread) strong { font-weight: 500; }
+.notif-list li.unread { box-shadow: inset 3px 0 0 var(--accent); }
+.notif-top { display: flex; justify-content: space-between; gap: 8px; }

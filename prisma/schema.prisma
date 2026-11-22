@@ -144,6 +144,7 @@ model Person {
   repairPhotos          RepairPhoto[]
   instalmentPlans       InstalmentPlan[]
   shopDevicesRegistered ShopDevice[]           @relation("ShopDeviceRegistrar")
+  notifications         Notification[]
 }
 
 model LoginAccount {
@@ -199,6 +200,21 @@ model ShopDevice {
   clockEvents    ClockEvent[]
 
   @@index([locationId])
+}
+
+// One row per recipient: what the bell in the top bar lists. The same event is also pushed to their installed app.
+model Notification {
+  id        String    @id @default(cuid())
+  personId  String
+  person    Person    @relation(fields: [personId], references: [id])
+  kind      String // CLOCK_IN, CLOCK_OUT, AUTO_CLOCK_OUT, DRAWER_OPEN
+  title     String
+  body      String
+  url       String
+  createdAt DateTime  @default(now())
+  readAt    DateTime?
+
+  @@index([personId, createdAt])
 }
 
 // Every sign-in try (password or PIN). Used to lock a username / address after repeated failures and as the login log.

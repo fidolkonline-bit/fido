@@ -1,10 +1,10 @@
 import "server-only";
 import { db, posting } from "./db";
-import { D, ZERO } from "./money";
+import { D, ZERO, money } from "./money";
 import { can } from "./permissions";
 import type { CurrentUser } from "./auth";
 import { getAttendanceSettings } from "./shop-device";
-import { attendance, dayStart, shiftEndFor, stillClockedIn, ymd } from "./hr";
+import { announceClock, attendance, dayStart, shiftEndFor, stillClockedIn, ymd } from "./hr";
 import { drawerSummary } from "./register";
 import { alertDrawerOpen } from "./attendance-night";
 
@@ -97,5 +97,13 @@ export async function endDay(user: CurrentUser, ip: string | null) {
     },
   });
   if (r.mustClose && r.drawer) await alertDrawerOpen(r.drawer.id, `${user.name} ended the day as the last one on the clock and could not close it.`);
+  if (clockOut) {
+    const v = r.lastClose?.variance != null ? D(r.lastClose.variance) : null;
+    const drawer = r.drawer
+      ? (r.mustClose ? "drawer left open" : r.others.length ? `drawer still open, ${r.others.length} on the clock` : "drawer open")
+      : r.lastClose ? (v && !v.eq(0) ? `drawer closed, ${v.gt(0) ? "over" : "short"} Rs. ${money(v.abs())}` : "drawer closed, balanced") : null;
+    const sales = `Rs. ${money(r.sales.total)} sales (${r.sales.count})`;
+    await announceClock(clockOut.id, { minutes: r.minutes, extra: [sales, drawer].filter(Boolean).join(" · ") });
+  }
   return { clockOut };
 }

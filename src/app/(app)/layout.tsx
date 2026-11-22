@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { NAV } from "@/lib/nav";
 import { Shell } from "@/components/Shell";
 import { pushPublicKey } from "@/lib/push";
+import { unreadCount } from "@/lib/notify";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const user = await requireUser();
@@ -25,6 +26,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         locationId={user.location?.id ?? null}
         registerOpen={registerOpen}
         shopDevice={!!user.device}
+        unread={await unreadCount(user.personId)}
         theme={t === "light" || t === "dark" ? t : "system"}
         vapidKey={pushPublicKey()}
       >

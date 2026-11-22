@@ -8,6 +8,7 @@ import { switchLocation, logout } from "@/app/(app)/actions";
 import { TaskAlerts } from "./TaskAlerts";
 import { ThemeSwitch, type ThemeChoice } from "./ThemeSwitch";
 import { InstallBanner } from "./pwa/InstallBanner";
+import { NotificationBell } from "./NotificationBell";
 
 type Props = {
   nav: NavGroup[];
@@ -17,6 +18,7 @@ type Props = {
   registerOpen: boolean;
   // Signed in on a registered shop device: the day ends with End my day (clock out + sign out).
   shopDevice: boolean;
+  unread: number;
   theme: ThemeChoice;
   vapidKey: string | null;
   children: ReactNode;
@@ -37,7 +39,7 @@ function activeHref(hrefs: string[], path: string, query: string) {
   return best;
 }
 
-export function Shell({ nav, user, locations, locationId, registerOpen, shopDevice, theme, vapidKey, children }: Props) {
+export function Shell({ nav, user, locations, locationId, registerOpen, shopDevice, unread, theme, vapidKey, children }: Props) {
   const path = usePathname();
   const query = useSearchParams().toString();
   const [open, setOpen] = useState(false);
@@ -70,8 +72,9 @@ export function Shell({ nav, user, locations, locationId, registerOpen, shopDevi
         <Link className="btn hide-sm" href="/pos">POS</Link>
         <Link className="btn hide-sm" href="/repairs/new">Repair</Link>
         <Link href="/settings" className="meta hide-sm" style={{ textDecoration: "none" }}><span>{user.name} · {user.role}</span></Link>
+        <NotificationBell initial={unread} />
         <ThemeSwitch initial={theme} />
-        <Link className="btn" href="/switch">Switch cashier</Link>
+        <Link className="btn" href="/switch" aria-label="Switch cashier">Switch<span className="hide-sm"> cashier</span></Link>
         {shopDevice && <Link className="btn btn-primary" href="/end">End<span className="hide-sm"> my</span> day</Link>}
         {/* On a shop device End my day signs out too, so on a phone-width screen it takes Log out's place. */}
         <form action={logout} className={shopDevice ? "hide-sm" : undefined}><button className="btn" type="submit">Log out</button></form>

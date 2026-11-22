@@ -25,6 +25,8 @@ export const attendanceSchema = z.object({
   autoClockIn: z.boolean().default(true),
   // The last person on the clock at a shop must count and close the drawer before ending their day.
   requireDrawerClose: z.boolean().default(true),
+  // Owners and managers get a notification each time someone clocks in or out.
+  notifyClock: z.boolean().default(true),
 });
 export type AttendanceSettings = z.infer<typeof attendanceSchema>;
 

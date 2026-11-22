@@ -79,6 +79,7 @@ export default async function ShopDevices() {
         <h2 style={{ margin: 0 }}>Attendance and nightly sign-out</h2>
         <label className="check"><input type="checkbox" name="autoClockIn" defaultChecked={settings.autoClockIn} /> Signing in on a shop device clocks the employee in</label>
         <label className="check"><input type="checkbox" name="requireDrawerClose" defaultChecked={settings.requireDrawerClose} /> The last person to end their day must count and close the cash drawer</label>
+        <label className="check"><input type="checkbox" name="notifyClock" defaultChecked={settings.notifyClock} /> Notify owners and managers each time someone clocks in or out</label>
         <label className="field"><span>Shop devices sign out at</span><input name="dayCutoff" type="time" defaultValue={settings.dayCutoff} required /></label>
         <p className="small muted" style={{ margin: 0 }}>
           Pick a time after the shop closes and before anyone starts, for example 02:00. It applies to new sign-ins; people already signed in keep the time they got.
