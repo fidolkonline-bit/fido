@@ -121,39 +121,73 @@ async function computeSlip(tx: Tx, employeeId: string, start: string, end: strin
   };
 }
 
-export async function createRun(user: CurrentUser, start: string, end: string, notes: string | null) {
+// Who already has a payslip for an overlapping period in another live (not cancelled) payroll — so nobody is paid twice.
+async function coveredElsewhere(tx: Tx, start: Date, end: Date, exceptRunId: string | null, employeeIds?: string[]) {
+  const slips = await tx.payslip.findMany({
+    where: {
+      ...(employeeIds ? { employeeId: { in: employeeIds } } : {}),
+      run: { status: { not: "CANCELLED" }, periodStart: { lte: end }, periodEnd: { gte: start }, ...(exceptRunId ? { id: { not: exceptRunId } } : {}) },
+    },
+    select: { employeeId: true, run: { select: { number: true } } },
+  });
+  return new Map(slips.map((s) => [s.employeeId, s.run.number]));
+}
+
+// employeeId set = payroll for that one person; null = everyone (minus anyone already paid in a one-person payroll).
+export async function createRun(user: CurrentUser, start: string, end: string, notes: string | null, employeeId: string | null = null) {
   if (end < start) throw new HrError("Period end is before the start.");
+  const s = dateOnly(start), e = dateOnly(end);
   const run = await posting(async (tx) => {
-    const clash = await tx.payrollRun.findFirst({ where: { periodStart: dateOnly(start), status: { not: "CANCELLED" } } });
-    if (clash) throw new HrError(`Payroll ${clash.number} already covers this period. Open it instead.`);
-    return tx.payrollRun.create({ data: { number: await nextNumber(tx, "PAYROLL"), periodStart: dateOnly(start), periodEnd: dateOnly(end), notes, createdById: user.personId } });
+    // Serialise run creation so two people cannot start clashing payrolls at once.
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('payroll-run'))`;
+    if (employeeId) {
+      const emp = await tx.employeeProfile.findUnique({ where: { id: employeeId }, include: { person: true } });
+      if (!emp) throw new HrError("Choose an employee.");
+      if (emp.joinedOn > e || (emp.leftOn && emp.leftOn < s)) throw new HrError(`${emp.person.fullName} was not employed during this period.`);
+      if (!(await salaryOn(employeeId, end))) throw new HrError(`${emp.person.fullName} has no salary set. Add one on the employee page first.`);
+      const other = (await coveredElsewhere(tx, s, e, null, [employeeId])).get(employeeId);
+      if (other) throw new HrError(`${emp.person.fullName} is already in payroll ${other} for this period. Open it instead.`);
+    } else {
+      const clash = await tx.payrollRun.findFirst({ where: { employeeId: null, status: { not: "CANCELLED" }, periodStart: { lte: e }, periodEnd: { gte: s } } });
+      if (clash) throw new HrError(`Payroll ${clash.number} already covers this period. Open it instead.`);
+    }
+    return tx.payrollRun.create({ data: { number: await nextNumber(tx, "PAYROLL"), periodStart: s, periodEnd: e, employeeId, notes, createdById: user.personId } });
   });
   await calculateRun(user, run.id);
   return run;
 }
 
-// Recalculate a draft run from current salary/attendance/leave/components. Manual lines are kept.
-export async function calculateRun(user: CurrentUser, runId: string) {
+// Recalculate a draft run (or one person in it) from current salary/attendance/leave/components. Manual lines are kept.
+export async function calculateRun(user: CurrentUser, runId: string, onlyEmployeeId?: string) {
   const run = await db.payrollRun.findUniqueOrThrow({ where: { id: runId }, include: { payslips: true } });
   if (run.status !== "DRAFT") throw new HrError("Only a draft payroll can be recalculated.");
   const start = dateOnlyYmd(run.periodStart);
   const end = dateOnlyYmd(run.periodEnd);
+  const scope = run.employeeId ?? onlyEmployeeId;
   const employees = await db.employeeProfile.findMany({
-    where: { joinedOn: { lte: run.periodEnd }, OR: [{ leftOn: null }, { leftOn: { gte: run.periodStart } }] },
+    where: { ...(scope ? { id: scope } : {}), joinedOn: { lte: run.periodEnd }, OR: [{ leftOn: null }, { leftOn: { gte: run.periodStart } }] },
   });
   const skipped: string[] = [];
   await posting(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('payroll-run'))`;
+    const covered = await coveredElsewhere(tx, run.periodStart, run.periodEnd, run.id, employees.map((e) => e.id));
     for (const e of employees) {
       const existing = run.payslips.find((p) => p.employeeId === e.id);
+      // Paid in another payroll for this period (e.g. a one-person payroll): leave them out here.
+      if (covered.has(e.id) && !existing) { skipped.push(e.id); continue; }
       const manual = ((existing?.lines as PayLine[] | undefined) ?? []).filter((l) => l.source === "MANUAL");
       const s = await computeSlip(tx, e.id, start, end, manual);
       if (!s) { skipped.push(e.id); continue; }
       const data = { ...s, lines: s.lines as unknown as Prisma.InputJsonValue };
       if (existing) await tx.payslip.update({ where: { id: existing.id }, data });
-      else await tx.payslip.create({ data: { ...data, runId, employeeId: e.id, periodStart: run.periodStart } });
+      else {
+        // A cancelled payroll may hold an earlier payslip for the same person and period; this one is the next revision.
+        const prev = await tx.payslip.aggregate({ where: { employeeId: e.id, periodStart: run.periodStart }, _max: { revision: true } });
+        await tx.payslip.create({ data: { ...data, runId, employeeId: e.id, periodStart: run.periodStart, revision: (prev._max.revision ?? 0) + 1 } });
+      }
     }
   }, 60_000);
-  await db.auditEvent.create({ data: { actorId: user.personId, action: "PAYROLL_CALCULATED", subjectType: "PayrollRun", subjectId: runId } });
+  await db.auditEvent.create({ data: { actorId: user.personId, action: "PAYROLL_CALCULATED", subjectType: "PayrollRun", subjectId: runId, ...(onlyEmployeeId ? { detail: { employeeId: onlyEmployeeId } } : {}) } });
   return { skipped: skipped.length };
 }
 

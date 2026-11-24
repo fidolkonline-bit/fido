@@ -186,14 +186,14 @@ model Session {
 // A computer or tablet the owner marked as standing in a shop. Its browser keeps a random key in a cookie (only the
 // hash is stored). Sign-ins on it end every night and clock the person in.
 model ShopDevice {
-  id             String    @id @default(cuid())
+  id             String       @id @default(cuid())
   name           String
   locationId     String
-  location       Location  @relation(fields: [locationId], references: [id])
-  tokenHash      String    @unique
+  location       Location     @relation(fields: [locationId], references: [id])
+  tokenHash      String       @unique
   registeredById String
-  registeredBy   Person    @relation("ShopDeviceRegistrar", fields: [registeredById], references: [id])
-  createdAt      DateTime  @default(now())
+  registeredBy   Person       @relation("ShopDeviceRegistrar", fields: [registeredById], references: [id])
+  createdAt      DateTime     @default(now())
   lastSeenAt     DateTime?
   revokedAt      DateTime?
   sessions       Session[]
@@ -503,22 +503,22 @@ model GoodsReceipt {
 }
 
 model ReceiptLine {
-  id           String             @id @default(cuid())
-  receiptId    String
-  receipt      GoodsReceipt       @relation(fields: [receiptId], references: [id])
-  productId    String
-  product      Product            @relation(fields: [productId], references: [id])
-  lotCode      String?
-  qtyReceived  Decimal            @db.Decimal(14, 4)
-  qtyAccepted  Decimal            @db.Decimal(14, 4)
-  qtyRejected  Decimal            @default(0) @db.Decimal(14, 4)
-  unitCost     Decimal            @db.Decimal(14, 4)
-  newSellPrice Decimal?           @db.Decimal(14, 2)
-  labelsPrinted Int             @default(0) // barcode labels printed for this line (staff confirm after printing)
-  costLayer    CostLayer?
-  devices      DeviceIdentity[]
-  poLineId     String?
-  poLine       PurchaseOrderLine? @relation(fields: [poLineId], references: [id])
+  id            String             @id @default(cuid())
+  receiptId     String
+  receipt       GoodsReceipt       @relation(fields: [receiptId], references: [id])
+  productId     String
+  product       Product            @relation(fields: [productId], references: [id])
+  lotCode       String?
+  qtyReceived   Decimal            @db.Decimal(14, 4)
+  qtyAccepted   Decimal            @db.Decimal(14, 4)
+  qtyRejected   Decimal            @default(0) @db.Decimal(14, 4)
+  unitCost      Decimal            @db.Decimal(14, 4)
+  newSellPrice  Decimal?           @db.Decimal(14, 2)
+  labelsPrinted Int                @default(0) // barcode labels printed for this line (staff confirm after printing)
+  costLayer     CostLayer?
+  devices       DeviceIdentity[]
+  poLineId      String?
+  poLine        PurchaseOrderLine? @relation(fields: [poLineId], references: [id])
 }
 
 // Orders never add stock by themselves; only posted GRN lines do (spec §7).
@@ -1288,6 +1288,7 @@ model EmployeeProfile {
   clockEvents       ClockEvent[]
   components        PayComponentAssignment[]
   payslips          Payslip[]
+  payrollRuns       PayrollRun[]
 }
 
 model SalaryHistory {
@@ -1406,15 +1407,18 @@ model PayComponentAssignment {
 }
 
 model PayrollRun {
-  id           String    @id @default(cuid())
-  number       String    @unique
-  periodStart  DateTime  @db.Date
-  periodEnd    DateTime  @db.Date
-  status       String    @default("DRAFT") // DRAFT, APPROVED, PART_PAID, PAID, CANCELLED
+  id           String           @id @default(cuid())
+  number       String           @unique
+  periodStart  DateTime         @db.Date
+  periodEnd    DateTime         @db.Date
+  status       String           @default("DRAFT") // DRAFT, APPROVED, PART_PAID, PAID, CANCELLED
+  // Set for a one-person payroll; null = everyone. A person is in at most one active run per period.
+  employeeId   String?
+  employee     EmployeeProfile? @relation(fields: [employeeId], references: [id])
   notes        String?
   createdById  String
-  createdBy    Person    @relation(fields: [createdById], references: [id])
-  createdAt    DateTime  @default(now())
+  createdBy    Person           @relation(fields: [createdById], references: [id])
+  createdAt    DateTime         @default(now())
   approvedById String?
   approvedAt   DateTime?
   payslips     Payslip[]

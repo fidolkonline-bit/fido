@@ -14,8 +14,13 @@ export const metadata = { title: "Payroll run" };
 
 export default async function Run({ params }: { params: Promise<{ id: string }> }) {
   await requirePermission("hr.payroll");
-  const run = await db.payrollRun.findUnique({ where: { id: (await params).id }, include: { payslips: { include: { employee: { include: { person: true } } }, orderBy: { employee: { person: { fullName: "asc" } } } } } });
+  const run = await db.payrollRun.findUnique({ where: { id: (await params).id }, include: { employee: { include: { person: true } }, payslips: { include: { employee: { include: { person: true } } }, orderBy: { employee: { person: { fullName: "asc" } } } } } });
   if (!run) notFound();
+  // People paid for this period in another payroll (e.g. on their own) are left out of an everyone payroll.
+  const elsewhere = run.employeeId ? [] : await db.payslip.findMany({
+    where: { runId: { not: run.id }, employeeId: { notIn: run.payslips.map((p) => p.employeeId) }, run: { status: { not: "CANCELLED" }, periodStart: { lte: run.periodEnd }, periodEnd: { gte: run.periodStart } } },
+    include: { employee: { include: { person: true } }, run: true },
+  });
   const accounts = await db.account.findMany({ where: { active: true, type: { in: ["BANK", "CASH"] } }, select: { id: true, name: true } });
   const draft = run.status === "DRAFT";
   const payable = ["APPROVED", "PART_PAID"].includes(run.status);
@@ -23,7 +28,7 @@ export default async function Run({ params }: { params: Promise<{ id: string }> 
 
   return (
     <div className="stack">
-      <PageHead eyebrow="HRM / Payroll" title={`${run.number} · ${fmtDate(run.periodStart)} – ${fmtDate(run.periodEnd)}`} actions={<Badge tone={RUN_TONE[run.status]}>{run.status.toLowerCase().replace("_", " ")}</Badge>} />
+      <PageHead eyebrow="HRM / Payroll" title={`${run.number}${run.employee ? ` · ${run.employee.person.fullName}` : ""} · ${fmtDate(run.periodStart)} – ${fmtDate(run.periodEnd)}`} actions={<Badge tone={RUN_TONE[run.status]}>{run.status.toLowerCase().replace("_", " ")}</Badge>} />
       <div className="stats">
         <Stat label="Gross" value={`Rs. ${money(sum("gross"))}`} basis={`${run.payslips.length} employees`} />
         <Stat label="Deductions" value={`Rs. ${money(sum("deductions"))}`} />
@@ -36,6 +41,7 @@ export default async function Run({ params }: { params: Promise<{ id: string }> 
         {draft && <form action={runAction}><input type="hidden" name="runId" value={run.id} /><input type="hidden" name="action" value="cancel" /><button className="btn btn-ghost btn-danger">Cancel draft</button></form>}
         {run.status === "APPROVED" && <form action={runAction}><input type="hidden" name="runId" value={run.id} /><input type="hidden" name="action" value="reopen" /><button className="btn">Reopen (no payments yet)</button></form>}
       </div>
+      {elsewhere.length > 0 && <p className="note">Paid in a separate payroll for this period, so not included here: {elsewhere.map((p, i) => <span key={p.id}>{i ? ", " : ""}{p.employee.person.fullName} (<Link href={`/hrm/payroll/${p.runId}`}>{p.run.number}</Link>)</span>)}.</p>}
       {draft && <p className="note">Draft: figures follow the latest salary, attendance, leave, components and approved commission each time you recalculate. Approving locks the payslips and settles the included commission so it cannot be paid twice.</p>}
       {payable && (
         <form action={payAllForm} className="panel row" style={{ alignItems: "flex-end" }}>
@@ -53,7 +59,7 @@ export default async function Run({ params }: { params: Promise<{ id: string }> 
         const due = D(p.net).minus(p.paid);
         return (
           <section key={p.id} className="panel stack" style={{ gap: 8 }}>
-            <div className="row"><strong style={{ fontWeight: 600, fontSize: 15 }}>{p.employee.person.fullName}</strong><span className="small muted">{p.payPeriod.toLowerCase()} · worked {p.daysWorked.toString()}/{p.workingDays.toString()} days{D(p.paidLeaveDays).gt(0) ? ` · paid leave ${p.paidLeaveDays}` : ""}{D(p.unpaidLeaveDays).gt(0) ? ` · unpaid leave ${p.unpaidLeaveDays}` : ""}{D(p.absentDays).gt(0) ? ` · absent ${p.absentDays} (not deducted)` : ""}</span><div className="spacer" /><Link className="small" href={`/hrm/payslips/${p.id}`}>Payslip</Link></div>
+            <div className="row"><strong style={{ fontWeight: 600, fontSize: 15 }}>{p.employee.person.fullName}</strong><span className="small muted">{p.payPeriod.toLowerCase()} · worked {p.daysWorked.toString()}/{p.workingDays.toString()} days{D(p.paidLeaveDays).gt(0) ? ` · paid leave ${p.paidLeaveDays}` : ""}{D(p.unpaidLeaveDays).gt(0) ? ` · unpaid leave ${p.unpaidLeaveDays}` : ""}{D(p.absentDays).gt(0) ? ` · absent ${p.absentDays} (not deducted)` : ""}</span><div className="spacer" />{draft && !run.employeeId && <form action={runAction}><input type="hidden" name="runId" value={run.id} /><input type="hidden" name="action" value="recalc" /><input type="hidden" name="employeeId" value={p.employeeId} /><SubmitButton className="btn btn-ghost small" pendingText="Recalculating…">Recalculate</SubmitButton></form>}<Link className="small" href={`/hrm/payslips/${p.id}`}>Payslip</Link></div>
             <div className="totalrow small"><span>Basic ({money(p.baseSalary)} / {p.payPeriod.toLowerCase()})</span><strong>{money(p.basicEarned)}</strong></div>
             {lines.map((l, i) => <div key={i} className="totalrow small"><span>{l.kind === "DEDUCTION" ? "− " : "+ "}{l.label}{l.source === "MANUAL" ? ` · ${l.note}` : ""}{l.source === "LEAVE" ? " (in basic)" : ""}</span><strong>{money(l.amount)}</strong></div>)}
             <div className="totalrow"><span>Net pay</span><strong>Rs. {money(p.net)}</strong></div>

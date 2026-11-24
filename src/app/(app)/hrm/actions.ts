@@ -181,7 +181,7 @@ export async function voidClockForm(f: FormData) {
 export async function newRun(_: Res, f: FormData): Promise<Res> {
   const user = await requirePermission("hr.payroll");
   let id: string;
-  try { id = (await P.createRun(user, str(f, "start") ?? "", str(f, "end") ?? "", str(f, "notes"))).id; } catch (e) { return formError(e); }
+  try { id = (await P.createRun(user, str(f, "start") ?? "", str(f, "end") ?? "", str(f, "notes"), str(f, "employeeId"))).id; } catch (e) { return formError(e); }
   redirect(`/hrm/payroll/${id}`);
 }
 
@@ -189,7 +189,7 @@ export async function runAction(f: FormData) {
   const user = await requirePermission("hr.payroll");
   const id = String(f.get("runId"));
   const a = String(f.get("action"));
-  if (a === "recalc") await P.calculateRun(user, id);
+  if (a === "recalc") await P.calculateRun(user, id, str(f, "employeeId") ?? undefined);
   else if (a === "approve") await P.approveRun(user, id);
   else if (a === "reopen") await P.reopenRun(user, id);
   else if (a === "cancel") {

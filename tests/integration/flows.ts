@@ -18,6 +18,7 @@ import type { CurrentUser } from "../../src/lib/auth";
 import { attendance, clockInOnSignIn, dayStart, todayYmd, ymd } from "../../src/lib/hr";
 import { nightlyAttendance } from "../../src/lib/attendance-night";
 import { dayReport, endDay } from "../../src/lib/day-end";
+import { calculateRun, createRun } from "../../src/lib/payroll";
 import { DENOMINATIONS, closeRegister, drawerSummary, openRegister, recordMovement } from "../../src/lib/register";
 
 if (!/127\.0\.0\.1|localhost/.test(process.env.DATABASE_URL ?? "")) throw new Error("Refusing to run: DATABASE_URL is not a local database.");
@@ -440,6 +441,48 @@ async function main() {
     await clockInOnSignIn({ personId: person.id, sessionId: "bell-in-2", deviceId: device.id, locationId: loc.id, ip: null });
     assert.equal((await mine("CLOCK_IN")).length, 1, "switched off: no new notification");
     await db.appSetting.delete({ where: { key: "attendance" } });
+  });
+
+  await step("payroll: one person on their own, left out of the everyone payroll, no double pay; cancelled run gets a new revision", async () => {
+    const tag = randomUUID().slice(0, 6);
+    const mkEmp = async (name: string, salary: number | null) => {
+      const person = await db.person.create({ data: { fullName: `${name} ${tag}` } });
+      const e = await db.employeeProfile.create({ data: { personId: person.id, joinedOn: new Date("2025-01-01") } });
+      if (salary) await db.salaryHistory.create({ data: { employeeId: e.id, amount: salary, payPeriod: "MONTH", effectiveFrom: new Date("2025-01-01"), createdById: acct.personId } });
+      return e;
+    };
+    const a = await mkEmp("Payroll A", 60000), b = await mkEmp("Payroll B", 45000), c = await mkEmp("Payroll C", null);
+    const [from, to] = ["2025-03-01", "2025-03-31"];
+    const slipsOf = (runId: string) => db.payslip.findMany({ where: { runId } });
+
+    const solo = await createRun(owner, from, to, null, a.id);
+    assert.equal(solo.employeeId, a.id);
+    const soloSlips = await slipsOf(solo.id);
+    assert.deepEqual(soloSlips.map((p) => p.employeeId), [a.id], "only that person");
+    assert.equal(soloSlips[0].net.toString(), "60000");
+    await fails(() => createRun(owner, from, to, null, a.id), /already in payroll/);
+    await fails(() => createRun(owner, from, to, null, c.id), /no salary/);
+
+    const all = await createRun(owner, from, to, null, null);
+    let ids = (await slipsOf(all.id)).map((p) => p.employeeId);
+    assert.ok(ids.includes(b.id) && !ids.includes(a.id), "everyone payroll skips the person paid on their own");
+    await fails(() => createRun(owner, "2025-03-15", "2025-04-14", null, null), /already covers/);
+    await fails(() => createRun(owner, from, to, null, b.id), /already in payroll/);
+
+    await calculateRun(owner, all.id);
+    await calculateRun(owner, all.id, b.id);
+    ids = (await slipsOf(all.id)).map((p) => p.employeeId);
+    assert.ok(ids.includes(b.id) && !ids.includes(a.id), "recalculating keeps them out");
+
+    // Cancelling the one-person draft hands them back to the everyone payroll as a new revision.
+    await db.payrollRun.update({ where: { id: solo.id }, data: { status: "CANCELLED" } });
+    await calculateRun(owner, all.id);
+    const back = await db.payslip.findFirstOrThrow({ where: { runId: all.id, employeeId: a.id } });
+    assert.equal(back.revision, 2);
+    const again = await createRun(owner, "2025-05-01", "2025-05-31", null, a.id);
+    await db.payrollRun.update({ where: { id: again.id }, data: { status: "CANCELLED" } });
+    const redo = await createRun(owner, "2025-05-01", "2025-05-31", null, a.id);
+    assert.equal((await slipsOf(redo.id))[0].revision, 2, "a cancelled one-person draft can be redone");
   });
 
   console.log("\nAll integration flows passed.");
