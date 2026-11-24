@@ -19,6 +19,7 @@ import { attendance, clockInOnSignIn, dayStart, todayYmd, ymd } from "../../src/
 import { nightlyAttendance } from "../../src/lib/attendance-night";
 import { dayReport, endDay } from "../../src/lib/day-end";
 import { calculateRun, createRun } from "../../src/lib/payroll";
+import { targetResult } from "../../src/lib/targets";
 import { DENOMINATIONS, closeRegister, drawerSummary, openRegister, recordMovement } from "../../src/lib/register";
 
 if (!/127\.0\.0\.1|localhost/.test(process.env.DATABASE_URL ?? "")) throw new Error("Refusing to run: DATABASE_URL is not a local database.");
@@ -483,6 +484,36 @@ async function main() {
     await db.payrollRun.update({ where: { id: again.id }, data: { status: "CANCELLED" } });
     const redo = await createRun(owner, "2025-05-01", "2025-05-31", null, a.id);
     assert.equal((await slipsOf(redo.id))[0].revision, 2, "a cancelled one-person draft can be redone");
+  });
+
+  await step("sales target: only chosen categories (and sub-categories) count, after invoice discount and returns", async () => {
+    const acc = await db.category.create({ data: { name: `Target Accessories ${randomUUID().slice(0, 6)}` } });
+    const covers = await db.category.create({ data: { name: `Target Covers ${randomUUID().slice(0, 6)}`, parentId: acc.id } });
+    const phones = await db.category.create({ data: { name: `Target Phones ${randomUUID().slice(0, 6)}` } });
+    await db.product.update({ where: { id: cover.id }, data: { categoryId: covers.id } });
+    await db.product.update({ where: { id: charger.id }, data: { categoryId: phones.id } });
+    if (!(await db.registerSession.findFirst({ where: { locationId: loc.id, closedAt: null } })))
+      await db.registerSession.create({ data: { locationId: loc.id, userId: acct.personId, openingCash: 0 } });
+    const day = dayStart(todayYmd());
+    const base = { personId: acct.personId, periodStart: new Date(`${todayYmd()}T00:00:00Z`), periodEnd: new Date(`${todayYmd()}T00:00:00Z`), mode: "FIXED", bands: [{ from: 1000, to: null, amount: 100 }] };
+    const accOnly = { ...base, cadence: "DAILY", categoryIds: [acc.id] };
+    const all = { ...base, cadence: "PERIOD", categoryIds: [] };
+    const [a0, b0] = [await targetResult(accOnly), await targetResult(all)];
+    // One bill: cover 2,000 + "phone" 15,000, invoice discount 170 → the cover carries 20 of it.
+    const s = await sale(owner, {
+      lines: [{ productId: cover.id, qty: 1, unitPrice: 2000, lots: [{ layerId: await lotOf(cover.id), qty: 1 }] }, { productId: charger.id, qty: 1, unitPrice: 15000, lots: [{ layerId: await lotOf(charger.id), qty: 1 }] }],
+      invoiceDiscount: 170, payments: [{ method: "CASH", amount: 16830 }],
+    });
+    const [a1, b1] = [await targetResult(accOnly), await targetResult(all)];
+    assert.equal(a1.value.minus(a0.value).toString(), "1980", "only the cover counts for an Accessories target");
+    assert.equal(b1.value.minus(b0.value).toString(), "16830", "no categories = everything");
+    assert.equal(a1.days?.length, 1);
+    assert.equal(a1.days![0].day, ymd(day));
+    assert.equal(a1.earning.toString(), "100");
+    const lines = await db.saleLine.findMany({ where: { saleId: s.id } });
+    await postReturn(owner, { idempotencyKey: randomUUID(), saleId: s.id, reason: "test", settlement: "REFUND", lines: [{ saleLineId: lines.find((l) => l.productId === cover.id)!.id, qty: 1, disposition: "SALEABLE" }] });
+    const a2 = await targetResult(accOnly);
+    assert.equal(a2.value.toString(), a0.value.toString(), "a returned cover no longer counts");
   });
 
   console.log("\nAll integration flows passed.");

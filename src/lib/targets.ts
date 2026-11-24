@@ -1,47 +1,40 @@
 import "server-only";
-import { Prisma } from "@prisma/client";
 import { db } from "./db";
-import { D, ZERO } from "./money";
+import { ZERO } from "./money";
+import { evaluate, expandCategories, validateBands, earning, type Band, type TargetLine } from "./target-calc";
 
-export type Band = { from: number; to: number | null; percent: number };
+export { validateBands, earning, type Band };
 
-export function validateBands(bands: Band[]) {
-  const sorted = [...bands].sort((a, b) => a.from - b.from);
-  for (let i = 0; i < sorted.length; i++) {
-    const b = sorted[i];
-    if (!(b.percent >= 0) || b.from < 0 || (b.to != null && b.to <= b.from)) throw new Error("Each band needs from < to and a percent.");
-    if (i > 0 && (sorted[i - 1].to == null || sorted[i - 1].to! > b.from)) throw new Error("Bands overlap or are ambiguous (§9.3).");
-  }
-  return sorted;
-}
+type TargetInput = { personId: string; periodStart: Date; periodEnd: Date; bands: unknown; mode: string; cadence: string; categoryIds: string[] };
 
-// Achieved = net sales credited to the person (salesperson, else the cashier) in the period, after returns, excluding rounding.
-export async function achieved(personId: string, start: Date, end: Date) {
-  const endExcl = new Date(end.getTime() + 86_400_000 - 330 * 60_000);
+// Sale lines credited to the person (salesperson, else the cashier) in the period, net of discounts and returns, excluding rounding.
+async function targetLines(personId: string, start: Date, end: Date, cats: Set<string> | null): Promise<TargetLine[]> {
   const startInst = new Date(start.getTime() - 330 * 60_000);
-  const sales = await db.sale.findMany({
-    where: { stage: "FINAL", soldAt: { gte: startInst, lt: endExcl }, OR: [{ salespersonId: personId }, { salespersonId: null, createdById: personId }] },
-    select: { subtotal: true, discount: true, credited: true, lines: { select: { product: { select: { sku: true } } } } },
+  const endExcl = new Date(end.getTime() + 86_400_000 - 330 * 60_000);
+  const inCats = cats ? [...cats] : null;
+  const lines = await db.saleLine.findMany({
+    where: {
+      sale: { stage: "FINAL", soldAt: { gte: startInst, lt: endExcl }, OR: [{ salespersonId: personId }, { salespersonId: null, createdById: personId }] },
+      ...(inCats ? { OR: [{ categoryId: { in: inCats } }, { categoryId: null, product: { categoryId: { in: inCats } } }] } : {}),
+    },
+    select: {
+      lineTotal: true, categoryId: true,
+      product: { select: { sku: true, categoryId: true } },
+      sale: { select: { soldAt: true, subtotal: true, discount: true } },
+      returnLines: { select: { value: true } },
+    },
   });
-  // Reloads are excluded: their margin is the provider spread, not a sales target.
-  return sales.filter((s) => !s.lines.every((l) => l.product.sku === "RELOAD")).reduce((a, s) => a.plus(s.subtotal).minus(s.discount).minus(s.credited), ZERO);
+  return lines.map((l) => ({
+    soldAt: l.sale.soldAt, lineTotal: l.lineTotal, saleSubtotal: l.sale.subtotal, saleDiscount: l.sale.discount,
+    returned: l.returnLines.reduce((a, r) => a.plus(r.value), ZERO),
+    categoryId: l.categoryId ?? l.product.categoryId,
+    // Reloads are excluded: their margin is the provider spread, not a sales target.
+    reload: l.product.sku === "RELOAD",
+  }));
 }
 
-export function earning(value: Prisma.Decimal, bands: Band[], mode: string) {
-  const sorted = [...bands].sort((a, b) => a.from - b.from);
-  if (mode === "PROGRESSIVE") {
-    return sorted.reduce((a, b) => {
-      const top = b.to == null ? value : Prisma.Decimal.min(value, b.to);
-      const slice = Prisma.Decimal.max(top.minus(b.from), ZERO);
-      return a.plus(slice.mul(b.percent).div(100));
-    }, ZERO).toDecimalPlaces(2);
-  }
-  const band = [...sorted].reverse().find((b) => value.gte(b.from));
-  return band ? value.mul(band.percent).div(100).toDecimalPlaces(2) : ZERO;
+export async function targetResult(t: TargetInput) {
+  const cats = t.categoryIds.length ? expandCategories(t.categoryIds, await db.category.findMany({ select: { id: true, parentId: true } })) : null;
+  const lines = await targetLines(t.personId, t.periodStart, t.periodEnd, cats);
+  return evaluate(lines, { bands: t.bands as Band[], mode: t.mode, cadence: t.cadence }, cats);
 }
-
-export async function targetResult(t: { personId: string; periodStart: Date; periodEnd: Date; bands: unknown; mode: string }) {
-  const value = await achieved(t.personId, t.periodStart, t.periodEnd);
-  return { value, earning: earning(value, t.bands as Band[], t.mode) };
-}
-

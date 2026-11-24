@@ -1593,8 +1593,10 @@ model SalesTarget {
   person      Person    @relation(fields: [personId], references: [id])
   periodStart DateTime  @db.Date
   periodEnd   DateTime  @db.Date
-  bands       Json // [{ from, to, percent }] non-overlapping
-  mode        String    @default("FLAT") // FLAT: whole amount at the reached band's %; PROGRESSIVE: each slice at its band
+  bands       Json // [{ from, to, percent?, amount? }] non-overlapping
+  mode        String    @default("FLAT") // FLAT: whole amount at the reached band's %; PROGRESSIVE: each slice at its band; FIXED: the reached band's fixed amount
+  cadence     String    @default("PERIOD") // PERIOD: one total for the whole period; DAILY: each day judged on its own, bonuses added up
+  categoryIds String[]  @default([]) // categories whose sales count (sub-categories included); empty = every category
   approvedAt  DateTime?
   payslipId   String?
   payslip     Payslip?  @relation(fields: [payslipId], references: [id])

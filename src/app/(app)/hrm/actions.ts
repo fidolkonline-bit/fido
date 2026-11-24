@@ -238,19 +238,65 @@ export async function payCommissionForm(_: Res, f: FormData): Promise<Res> {
 // ── Sales targets (§9.3) ──
 export async function newTargetForm(_: Res, f: FormData): Promise<Res> {
   await requirePermission("hr.payroll");
+  const personIds = [...new Set(f.getAll("personIds").map(String).filter(Boolean))];
   return wrap(["/hrm/targets"], async () => {
     const T = await import("@/lib/targets");
+    if (!personIds.length) throw new Error("Choose at least one employee.");
+    const mode = str(f, "mode") ?? "FIXED";
+    const cadence = str(f, "cadence") === "DAILY" ? "DAILY" : "PERIOD";
     const bands = [0, 1, 2, 3].flatMap((i) => {
-      const from = num(f, `from${i}`), pct = num(f, `pct${i}`);
-      return from == null || pct == null ? [] : [{ from, to: num(f, `to${i}`), percent: pct }];
+      const from = num(f, `from${i}`), bonus = num(f, `bonus${i}`);
+      if (from == null && bonus == null) return [];
+      if (from == null || bonus == null) throw new Error(`Band ${i + 1} needs both "sales from" and a bonus.`);
+      return [{ from, to: num(f, `to${i}`), ...(mode === "FIXED" ? { amount: bonus } : { percent: bonus }) }];
     });
-    if (!bands.length) throw new Error("Add at least one band.");
     const start = str(f, "periodStart"), end = str(f, "periodEnd");
     if (!start || !end || end < start) throw new Error("Choose a valid period.");
-    await db.salesTarget.create({
-      data: { personId: String(f.get("personId")), periodStart: H.dateOnly(start), periodEnd: H.dateOnly(end), bands: T.validateBands(bands), mode: str(f, "mode") ?? "FLAT" },
+    const validBands = T.validateBands(bands, mode);
+    const categoryIds = [...new Set(f.getAll("categoryIds").map(String).filter(Boolean))];
+    const known = await db.category.count({ where: { id: { in: categoryIds } } });
+    if (known !== categoryIds.length) throw new Error("A chosen category no longer exists.");
+    const people = await db.person.count({ where: { id: { in: personIds }, employee: { isNot: null } } });
+    if (people !== personIds.length) throw new Error("A chosen employee no longer exists.");
+    await db.salesTarget.createMany({
+      data: personIds.map((personId) => ({ personId, periodStart: H.dateOnly(start), periodEnd: H.dateOnly(end), bands: validBands, mode, cadence, categoryIds })),
     });
-  }, "Target saved.");
+  }, personIds.length > 1 ? `${personIds.length} targets saved.` : "Target saved.");
+}
+
+// Repeats the targets of one period for the period after it, for employees who are still active.
+export async function copyTargetsForm(_: Res, f: FormData): Promise<Res> {
+  await requirePermission("hr.payroll");
+  let made = 0, period = "";
+  try {
+    const C = await import("@/lib/target-calc");
+    const [start, end] = (str(f, "period") ?? "").split("|");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(start ?? "") || !/^\d{4}-\d{2}-\d{2}$/.test(end ?? "")) throw new Error("Choose the period to copy.");
+    const src = await db.salesTarget.findMany({
+      where: { periodStart: H.dateOnly(start), periodEnd: H.dateOnly(end), person: { active: true, employee: { isNot: null } } },
+      orderBy: { createdAt: "asc" },
+    });
+    if (!src.length) throw new Error("That period has no targets for current employees.");
+    const next = C.nextPeriod(start, end);
+    const existing = new Set((await db.salesTarget.findMany({ where: { periodStart: H.dateOnly(next.start) }, select: { personId: true } })).map((t) => t.personId));
+    const rows = src.filter((t) => !existing.has(t.personId));
+    if (!rows.length) throw new Error(`Everyone already has a target starting ${next.start}.`);
+    await db.salesTarget.createMany({
+      data: rows.map((t) => ({ personId: t.personId, periodStart: H.dateOnly(next.start), periodEnd: H.dateOnly(next.end), bands: t.bands ?? [], mode: t.mode, cadence: t.cadence, categoryIds: t.categoryIds })),
+    });
+    made = rows.length;
+    period = `${next.start} – ${next.end}`;
+  } catch (e) { return formError(e); }
+  revalidatePath("/hrm/targets");
+  return { ok: `Copied ${made} target${made === 1 ? "" : "s"} to ${period}.` };
+}
+
+export async function deleteTargetForm(f: FormData) {
+  await requirePermission("hr.payroll");
+  const t = await db.salesTarget.findUniqueOrThrow({ where: { id: String(f.get("id")) } });
+  if (t.approvedAt) throw new Error("An approved target cannot be deleted.");
+  await db.salesTarget.delete({ where: { id: t.id } });
+  revalidatePath("/hrm/targets");
 }
 
 export async function approveTargetForm(f: FormData) {
@@ -258,8 +304,19 @@ export async function approveTargetForm(f: FormData) {
   const T = await import("@/lib/targets");
   const t = await db.salesTarget.findUniqueOrThrow({ where: { id: String(f.get("id")) } });
   if (t.payslipId) throw new Error("Already paid in payroll.");
+  if (t.approvedAt) throw new Error("Already approved.");
   if (H.dateOnlyYmd(t.periodEnd) >= H.todayYmd()) throw new Error("Approve after the target period has ended.");
   const r = await T.targetResult(t);
-  await db.salesTarget.update({ where: { id: t.id }, data: { approvedAt: new Date(), snapshot: { achieved: r.value.toFixed(2), earning: r.earning.toFixed(2), by: user.name } } });
+  const categories = t.categoryIds.length ? (await db.category.findMany({ where: { id: { in: t.categoryIds } }, select: { name: true } })).map((c) => c.name) : null;
+  await db.salesTarget.update({
+    where: { id: t.id },
+    data: {
+      approvedAt: new Date(),
+      snapshot: {
+        achieved: r.value.toFixed(2), earning: r.earning.toFixed(2), by: user.name, cadence: t.cadence, mode: t.mode, categories,
+        ...(r.days ? { days: r.days.map((d) => ({ day: d.day, value: d.value.toFixed(2), earning: d.earning.toFixed(2) })) } : {}),
+      },
+    },
+  });
   revalidatePath("/hrm/targets");
 }

@@ -2,6 +2,7 @@ import type { Prisma } from "@prisma/client";
 import { db } from "../db";
 import { attendance, dateOnlyYmd } from "../hr";
 import { targetResult } from "../targets";
+import { MODE_LABEL } from "../target-calc";
 import { SMS_EVENTS, type SmsEvent } from "../sms";
 import type { PayLine } from "../payroll";
 import type { ReportDef, Row } from "./types";
@@ -154,9 +155,9 @@ export const opsReports: ReportDef[] = [
       for (const t of targets) {
         const snap = t.snapshot as { achieved: string; earning: string } | null;
         const live = snap ? null : await targetResult(t);
-        rows.push({ employee: t.person.fullName, from: t.periodStart, to: t.periodEnd, mode: t.mode.toLowerCase(), achieved: snap?.achieved ?? live!.value, bonus: snap?.earning ?? live!.earning, status: t.payslip ? `paid · ${t.payslip.run.number}` : t.approvedAt ? "approved" : dateOnlyYmd(t.periodEnd) < ctx.toYmd ? "not approved" : "in progress" });
+        rows.push({ employee: t.person.fullName, from: t.periodStart, to: t.periodEnd, mode: `${t.cadence === "DAILY" ? "daily" : "whole period"} · ${MODE_LABEL[t.mode] ?? t.mode.toLowerCase()}${t.categoryIds.length ? ` · ${t.categoryIds.length} categor${t.categoryIds.length === 1 ? "y" : "ies"}` : ""}`, achieved: snap?.achieved ?? live!.value, bonus: snap?.earning ?? live!.earning, status: t.payslip ? `paid · ${t.payslip.run.number}` : t.approvedAt ? "approved" : dateOnlyYmd(t.periodEnd) < ctx.toYmd ? "not approved" : "in progress" });
       }
-      return { columns: [{ key: "employee", label: "Employee" }, { key: "from", label: "From", kind: "date" }, { key: "to", label: "To", kind: "date" }, { key: "mode", label: "Bands" }, { key: "achieved", label: "Achieved", kind: "money" }, { key: "bonus", label: "Bonus", kind: "money" }, { key: "status", label: "Status" }], rows, totals: totalsOf(rows, ["achieved", "bonus"]) };
+      return { columns: [{ key: "employee", label: "Employee" }, { key: "from", label: "From", kind: "date" }, { key: "to", label: "To", kind: "date" }, { key: "mode", label: "Target" }, { key: "achieved", label: "Achieved", kind: "money" }, { key: "bonus", label: "Bonus", kind: "money" }, { key: "status", label: "Status" }], rows, totals: totalsOf(rows, ["achieved", "bonus"]) };
     },
   },
   {
