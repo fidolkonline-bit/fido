@@ -4,7 +4,7 @@ import { z } from "zod";
 import { db, posting, type Tx } from "./db";
 import { D, ZERO } from "./money";
 import { nextNumber } from "./numbering";
-import { lotDate, nextLot } from "./lots";
+import { lotDate, lotPrefix, nextLot } from "./lots";
 import { autoLotCode, ReceiptError } from "./purchases";
 import { notifyPeople } from "./notify";
 import type { CurrentUser } from "./auth";
@@ -76,8 +76,8 @@ export async function quickReceive(user: CurrentUser, raw: unknown) {
       const s = await tx.contact.findFirst({ where: { id: input.supplierId, isSupplier: true }, select: { id: true } });
       if (!s) throw new ReceiptError("That supplier was not found.");
     }
-    // Lot as on a normal GRN (supplier code + date); with no supplier yet, NEW-261126. It stays the same when the
-    // cost is added, so labels printed today still match.
+    // Lot as on a normal GRN (supplier code + date); with no supplier yet, NEW-261126. When the owner adds the cost
+    // it becomes the standard lot of the supplier they choose (see completeReceipt).
     const now = new Date();
     const lotCode = input.supplierId ? await autoLotCode(tx, input.supplierId, now, true) : await pendingLot(tx, now);
 
@@ -187,6 +187,16 @@ export const completeInput = z.object({
   }).nullable().default(null),
 });
 
+// The standard lot for the supplier the owner chose: supplier code + the day the goods arrived (not the day the cost
+// was added), with -2, -3… after another delivery that day. Kept as is when it already is that supplier's lot for
+// that day (the salesperson picked the same supplier).
+async function standardLot(tx: Tx, supplierId: string, receivedAt: Date, current: string | null) {
+  const s = await tx.contact.findUniqueOrThrow({ where: { id: supplierId }, select: { supplierCode: true, name: true } });
+  const base = `${lotPrefix(s)}-${lotDate(receivedAt)}`;
+  if (current && (current === base || (current.startsWith(`${base}-`) && /^\d+$/.test(current.slice(base.length + 1))))) return current;
+  return autoLotCode(tx, supplierId, receivedAt, true);
+}
+
 // The owner adds cost, supplier (and optionally a payment). The GRN becomes a normal posted one, and the cost is
 // filled into its lots, the stock ledger, and every sale and return that already used that stock, so profit for
 // those days is corrected. Commission is on the selling price and does not change.
@@ -206,13 +216,16 @@ export async function completeReceipt(user: CurrentUser, raw: unknown) {
     const given = new Map(input.lines.map((l) => [l.lineId, l]));
     if (given.size !== r.lines.length || r.lines.some((l) => !given.has(l.id))) throw new ReceiptError("Enter a cost for every item on this GRN.");
 
+    const oldLot = r.lines.find((l) => l.lotCode)?.lotCode ?? null;
+    const lot = await standardLot(tx, input.supplierId, r.receivedAt, oldLot);
+
     let total = ZERO;
     let soldUnits = ZERO;
     for (const line of r.lines) {
       const g = given.get(line.id)!;
       const cost = D(g.unitCost).toDecimalPlaces(4);
       total = total.plus(D(line.qtyAccepted).mul(cost));
-      await tx.receiptLine.update({ where: { id: line.id }, data: { unitCost: cost, newSellPrice: g.newSellPrice != null ? D(g.newSellPrice).toDecimalPlaces(2) : null } });
+      await tx.receiptLine.update({ where: { id: line.id }, data: { unitCost: cost, lotCode: lot, newSellPrice: g.newSellPrice != null ? D(g.newSellPrice).toDecimalPlaces(2) : null } });
       await tx.product.update({
         where: { id: line.productId },
         data: {
@@ -226,7 +239,7 @@ export async function completeReceipt(user: CurrentUser, raw: unknown) {
       const ids = await pendingLayerIds(tx, line.costLayer.id);
       // Returns that went back into these lots: their cost was recorded as 0 and is filled in below.
       const returnMoves = await tx.stockMovement.findMany({ where: { costLayerId: { in: ids }, kind: "SALE_RETURN" }, select: { sourceId: true, qty: true } });
-      await tx.costLayer.updateMany({ where: { id: { in: ids } }, data: { unitCost: cost, costPending: false } });
+      await tx.costLayer.updateMany({ where: { id: { in: ids } }, data: { unitCost: cost, costPending: false, lotCode: lot } });
       await tx.stockMovement.updateMany({ where: { costLayerId: { in: ids } }, data: { unitCost: cost } });
 
       const allocs = await tx.costAllocation.findMany({ where: { costLayerId: { in: ids } }, select: { id: true, saleLineId: true, qty: true, returnedQty: true } });
@@ -275,7 +288,7 @@ export async function completeReceipt(user: CurrentUser, raw: unknown) {
       });
     }
     await tx.auditEvent.create({
-      data: { actorId: user.personId, action: "RECEIPT_COST_ADDED", subjectType: "GoodsReceipt", subjectId: r.id, detail: { number: r.number, total: total.toString(), soldBeforeCost: soldUnits.toString() } },
+      data: { actorId: user.personId, action: "RECEIPT_COST_ADDED", subjectType: "GoodsReceipt", subjectId: r.id, detail: { number: r.number, total: total.toString(), soldBeforeCost: soldUnits.toString(), ...(oldLot !== lot ? { lotFrom: oldLot, lotTo: lot } : {}) } },
     });
     return { id: r.id, number: r.number };
   });

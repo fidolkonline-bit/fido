@@ -68,7 +68,8 @@ export default async function ReceiptDetail({ params }: { params: Promise<{ id: 
         ]}
       />
       {complete && (
-        <CompleteForm receiptId={r.id} supplierId={r.supplierId} notes={r.notes} suppliers={complete[1]} accounts={complete[2]} categories={complete[3]}
+        <CompleteForm receiptId={r.id} supplierId={r.supplierId} notes={r.notes} suppliers={complete[1]}
+          lot={r.lines.find((l) => l.lotCode)?.lotCode ?? null} labelsPrinted={r.lines.reduce((a, l) => a + l.labelsPrinted, 0)} accounts={complete[2]} categories={complete[3]}
           lines={r.lines.map((l) => {
             const im = complete[0].find((x) => x.lineId === l.id);
             return {

@@ -14,9 +14,9 @@ const n = (v: string) => (v.trim() !== "" && Number.isFinite(Number(v)) ? Number
 const fmt = (v: number) => v.toLocaleString("en-LK", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 // Owner: add cost (and supplier, payment) to a quick-received GRN. Sales already made from it get this cost too.
-export function CompleteForm({ receiptId, lines, suppliers, accounts, categories, supplierId: initialSupplier, notes: initialNotes }: {
+export function CompleteForm({ receiptId, lines, suppliers, accounts, categories, supplierId: initialSupplier, notes: initialNotes, lot, labelsPrinted }: {
   receiptId: string; lines: CompleteLine[]; suppliers: { id: string; name: string }[]; accounts: { id: string; name: string }[];
-  categories: { id: string; name: string }[]; supplierId: string | null; notes: string | null;
+  categories: { id: string; name: string }[]; supplierId: string | null; notes: string | null; lot: string | null; labelsPrinted: number;
 }) {
   const router = useRouter();
   const [supplierId, setSupplierId] = useState(initialSupplier ?? "");
@@ -49,6 +49,8 @@ export function CompleteForm({ receiptId, lines, suppliers, accounts, categories
     <section className="panel stack" aria-labelledby="add-cost">
       <h2 id="add-cost" style={{ margin: 0 }}>Add cost</h2>
       {soldTotal > 0 && <p className="note" style={{ margin: 0 }}>{soldTotal} unit{soldTotal === 1 ? "" : "s"} from this GRN {soldTotal === 1 ? "is" : "are"} already sold. Their profit is updated with the cost you enter here.</p>}
+      <p className="small muted" style={{ margin: 0 }}>The lot{lot ? <> (now <strong>{lot}</strong>)</> : null} becomes the supplier&apos;s standard lot: supplier code + the day the goods arrived.</p>
+      {labelsPrinted > 0 && <p className="note" style={{ margin: 0 }}>{labelsPrinted} label{labelsPrinted === 1 ? " was" : "s were"} already printed{lot ? <> with lot {lot}</> : null}. If the lot changes, reprint them so the lot on the label matches.</p>}
       <div className="grid2">
         <label className="field"><span>Supplier *</span>
           <SearchSelect name="supplierId" label="Supplier" options={suppliers} defaultValue={supplierId} onChange={setSupplierId} placeholder="Search supplier…" noneLabel="Select supplier…" />

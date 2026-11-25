@@ -8,7 +8,7 @@ import { finalizeSale } from "../../src/lib/sales";
 import { postReturn } from "../../src/lib/returns";
 import { postAdjustment } from "../../src/lib/adjustments";
 import { quickReceive, completeReceipt, pendingImpact, remindPendingCost } from "../../src/lib/quick-receive";
-import { lotDate } from "../../src/lib/lots";
+import { lotDate, lotPrefix } from "../../src/lib/lots";
 import { D } from "../../src/lib/money";
 import type { CurrentUser } from "../../src/lib/auth";
 
@@ -113,7 +113,13 @@ async function main() {
       lines: [{ lineId: cableLine.id, unitCost: 250, categoryId: category.id }, { lineId: coverLine.id, unitCost: 400, newSellPrice: 2100 }],
       payment: { amount: 1000, method: "CASH", accountId: null },
     });
-    const done = await db.goodsReceipt.findUniqueOrThrow({ where: { id: grnId } });
+    const done = await db.goodsReceipt.findUniqueOrThrow({ where: { id: grnId }, include: { lines: true } });
+    // NEW-… became the supplier's standard lot for the day the goods arrived (yesterday here), on every lot of it.
+    const stdLot = `${lotPrefix(supplier)}-${lotDate(done.receivedAt)}`;
+    for (const l of done.lines) assert.match(l.lotCode ?? "", new RegExp(`^${stdLot}(-\\d+)?$`));
+    const lot = done.lines[0].lotCode;
+    assert.ok(done.lines.every((l) => l.lotCode === lot));
+    for (const l of await db.costLayer.findMany({ where: { productId: cableId } })) assert.equal(l.lotCode, lot, "held return lot renamed too");
     assert.equal(done.status, "POSTED"); assert.equal(done.supplierId, supplier.id); assert.ok(done.costAddedAt);
     assert.ok(D(done.total).eq(10 * 250 + 5 * 400)); assert.ok(D(done.paid).eq(1000));
     assert.equal(await db.costLayer.count({ where: { productId: { in: [cableId, cover.id] }, costPending: true } }), 0);
@@ -129,6 +135,21 @@ async function main() {
     assert.ok(D((await db.product.findUniqueOrThrow({ where: { id: cover.id } })).sellPrice).eq(2100));
     assert.equal(await db.notification.count({ where: { kind: "GRN_COST_PENDING", url: `/purchases/${grnId}`, readAt: null } }), 0);
     await fails(() => completeReceipt(owner, { receiptId: grnId, supplierId: supplier.id, lines: [{ lineId: cableLine.id, unitCost: 1 }, { lineId: coverLine.id, unitCost: 1 }] }), /already has its cost/);
+  });
+
+  await step("lot: kept when the owner confirms the salesperson's supplier, follows the owner's choice when changed", async () => {
+    const other = await db.contact.create({ data: { name: "Quick Test Traders", isSupplier: true, isCustomer: false, supplierCode: "QTT" } });
+    const same = await quickReceive(cashier, { idempotencyKey: randomUUID(), supplierId: supplier.id, lines: [{ productId: cover.id, qty: 1 }] });
+    const sameLine = await db.receiptLine.findFirstOrThrow({ where: { receiptId: same.id } });
+    assert.match(sameLine.lotCode ?? "", new RegExp(`^${lotPrefix(supplier)}-${lotDate(new Date())}`));
+    await completeReceipt(owner, { receiptId: same.id, supplierId: supplier.id, lines: [{ lineId: sameLine.id, unitCost: 400 }] });
+    assert.equal((await db.receiptLine.findUniqueOrThrow({ where: { id: sameLine.id } })).lotCode, sameLine.lotCode, "unchanged, no -2");
+
+    const changed = await quickReceive(cashier, { idempotencyKey: randomUUID(), supplierId: supplier.id, lines: [{ productId: cover.id, qty: 2 }] });
+    const chLine = await db.receiptLine.findFirstOrThrow({ where: { receiptId: changed.id }, include: { costLayer: true } });
+    await completeReceipt(owner, { receiptId: changed.id, supplierId: other.id, lines: [{ lineId: chLine.id, unitCost: 410 }] });
+    const after = await db.receiptLine.findUniqueOrThrow({ where: { id: chLine.id }, include: { costLayer: true } });
+    assert.equal(after.lotCode, `QTT-${lotDate(new Date())}`); assert.equal(after.costLayer?.lotCode, after.lotCode);
   });
 
   await step("after the cost is in, the stock can be written off as normal", async () => {
