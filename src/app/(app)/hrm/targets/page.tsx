@@ -8,11 +8,11 @@ import { ActionForm } from "@/components/ActionForm";
 import { SubmitButton } from "@/components/SubmitButton";
 import { newTargetForm, approveTargetForm, copyTargetsForm, deleteTargetForm } from "../actions";
 import * as H from "@/lib/hr";
+import { DaysDetail } from "./DaysDetail";
 
 export const metadata = { title: "Sales targets" };
 
 type Snapshot = { achieved: string; earning: string; categories?: string[] | null; days?: { day: string; value: string; earning: string }[] };
-type Day = { day: string; value: string; earning: string };
 
 const plain = (n: number) => new Intl.NumberFormat("en-LK", { maximumFractionDigits: 2 }).format(n);
 
@@ -139,21 +139,5 @@ export default async function Targets() {
         <div><SubmitButton>Save target</SubmitButton></div>
       </ActionForm>
     </div>
-  );
-}
-
-function DaysDetail({ days }: { days: Day[] }) {
-  const hit = days.filter((d) => Number(d.earning) > 0);
-  return (
-    <details className="small">
-      <summary className="muted">Bonus on {hit.length} of {days.length} day{days.length === 1 ? "" : "s"} with sales</summary>
-      <table className="small" style={{ marginLeft: "auto" }}>
-        <tbody>
-          {days.map((d) => (
-            <tr key={d.day}><td style={{ paddingRight: 8 }}>{fmtDate(new Date(`${d.day}T00:00:00Z`))}</td><td style={{ paddingRight: 8 }}>{money(d.value)}</td><td>{Number(d.earning) > 0 ? money(d.earning) : "—"}</td></tr>
-          ))}
-        </tbody>
-      </table>
-    </details>
   );
 }

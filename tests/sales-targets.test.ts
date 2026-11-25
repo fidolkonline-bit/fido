@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Prisma } from "@prisma/client";
-import { earning, evaluate, expandCategories, lineNet, nextPeriod, validateBands, type TargetLine } from "../src/lib/target-calc";
+import { earning, evaluate, expandCategories, lineNet, nextBand, nextPeriod, validateBands, type TargetLine } from "../src/lib/target-calc";
 
 const d = (v: number | string) => new Prisma.Decimal(v);
 // Colombo time: 10:00 local = 04:30 UTC.
@@ -87,4 +87,18 @@ test("next period: whole months roll to whole months, other ranges keep their le
   assert.deepEqual(nextPeriod("2026-11-01", "2026-11-30"), { start: "2026-12-01", end: "2026-12-31" });
   assert.deepEqual(nextPeriod("2027-01-01", "2027-01-31"), { start: "2027-02-01", end: "2027-02-28" });
   assert.deepEqual(nextPeriod("2026-11-02", "2026-11-08"), { start: "2026-11-09", end: "2026-11-15" });
+});
+
+test("next band: how much more to the next band, none once the top is reached", () => {
+  assert.equal(nextBand(0, FIXED)!.more.toString(), "20000");
+  assert.equal(nextBand(15500, FIXED)!.more.toString(), "4500");
+  assert.equal(nextBand(15500, FIXED)!.band.amount, 500);
+  assert.equal(nextBand(20000, FIXED)!.more.toString(), "20000");
+  assert.equal(nextBand(39999, FIXED)!.band.amount, 1200);
+  assert.equal(nextBand(40000, FIXED), null);
+  assert.equal(nextBand(85000, FIXED), null);
+  // A band from 0 pays only once there is a sale.
+  const zero = [{ from: 0, to: null, amount: 100 }];
+  assert.equal(nextBand(0, zero)!.more.toString(), "0");
+  assert.equal(nextBand(1, zero), null);
 });

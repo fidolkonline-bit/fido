@@ -90,6 +90,15 @@ export function evaluate(lines: TargetLine[], t: { bands: Band[]; mode: string; 
   return { value, earning: days.reduce((a, d) => a.plus(d.earning), ZERO), days };
 }
 
+// The next band above the current sales, and how much more is needed to reach it. null once the top band is reached.
+export function nextBand(value: Prisma.Decimal.Value, bands: Band[]): { band: Band; more: Prisma.Decimal } | null {
+  const v = D(value);
+  const band = [...bands].sort((a, b) => a.from - b.from).find((b) => v.lt(b.from) || (b.from === 0 && v.lte(0)));
+  if (!band) return null;
+  // A band from 0 still needs a sale to pay (see earning); show that as "any sale".
+  return { band, more: Prisma.Decimal.max(D(band.from).minus(v), ZERO) };
+}
+
 export function bandText(b: Band, mode: string, fmt: (n: number) => string) {
   const range = `${fmt(b.from)}–${b.to == null ? "∞" : fmt(b.to)}`;
   return mode === "FIXED" ? `${range}: Rs ${fmt(b.amount ?? 0)}` : `${range}: ${b.percent ?? 0}%`;

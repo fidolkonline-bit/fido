@@ -110,6 +110,7 @@ export const NAV: NavGroup[] = [
       { label: "People desk", href: "/hrm" },
       { label: "My attendance & leave", href: "/hrm/me" },
       { label: "My commission", href: "/hrm/me/commission" },
+      { label: "My targets", href: "/hrm/me/targets" },
       { label: "Attendance", href: "/hrm/attendance", perm: "hr.view" },
       { label: "Leave", href: "/hrm/leave", perm: "hr.view" },
       { label: "Employees", href: "/hrm/employees", perm: "hr.view" },
