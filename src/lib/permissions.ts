@@ -9,6 +9,7 @@ export const PERMISSIONS = {
   "cost.view": "See purchase costs and profit",
   "purchases.view": "View purchases / GRNs",
   "purchases.post": "Receive goods, post GRNs and raise purchase orders",
+  "purchases.quick_receive": "Quick receive: add stock without cost (the owner adds the cost later)",
   "purchases.claims": "Supplier returns, claims and recovery",
   "imports.run": "Import products and opening stock",
   "sales.view": "View sales history",
@@ -76,7 +77,7 @@ export const DEFAULT_ROLES: { name: string; description: string; permissions: Pe
   {
     name: "Cashier",
     description: "POS and register at assigned locations",
-    permissions: ["contacts.view", "contacts.manage", "products.view", "sales.view", "sales.create", "debt.view", "debt.receive", "register.operate", "repairs.view", "repairs.manage", "reloads.process"],
+    permissions: ["contacts.view", "contacts.manage", "products.view", "sales.view", "sales.create", "debt.view", "debt.receive", "register.operate", "repairs.view", "repairs.manage", "reloads.process", "purchases.quick_receive"],
   },
   {
     name: "Stock clerk",

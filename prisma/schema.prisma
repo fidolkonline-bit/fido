@@ -207,7 +207,7 @@ model Notification {
   id        String    @id @default(cuid())
   personId  String
   person    Person    @relation(fields: [personId], references: [id])
-  kind      String // CLOCK_IN, CLOCK_OUT, AUTO_CLOCK_OUT, DRAWER_OPEN
+  kind      String // CLOCK_IN, CLOCK_OUT, AUTO_CLOCK_OUT, DRAWER_OPEN, GRN_COST_PENDING
   title     String
   body      String
   url       String
@@ -477,12 +477,16 @@ model Product {
 model GoodsReceipt {
   id             String        @id @default(cuid())
   number         String        @unique
-  supplierId     String
-  supplier       Contact       @relation(fields: [supplierId], references: [id])
+  // Blank only while a quick receive is waiting for cost (status PENDING_COST); set when the owner completes it.
+  supplierId     String?
+  supplier       Contact?      @relation(fields: [supplierId], references: [id], onDelete: Restrict)
   locationId     String
   location       Location      @relation(fields: [locationId], references: [id])
   supplierRef    String?
-  status         String        @default("POSTED") // DRAFT, CHECKED, POSTED, REVERSED
+  // PENDING_COST: quick receive by shop staff — stock is in and sellable, costs, supplier and total come later.
+  status         String        @default("POSTED") // DRAFT, CHECKED, PENDING_COST, POSTED, REVERSED
+  costAddedAt    DateTime?
+  costAddedById  String?
   receivedAt     DateTime      @default(now())
   notes          String?
   total          Decimal       @default(0) @db.Decimal(14, 2)
@@ -515,6 +519,7 @@ model ReceiptLine {
   unitCost      Decimal            @db.Decimal(14, 4)
   newSellPrice  Decimal?           @db.Decimal(14, 2)
   labelsPrinted Int                @default(0) // barcode labels printed for this line (staff confirm after printing)
+  newProduct    Boolean            @default(false) // product was created by this quick receive (owner completes its details)
   costLayer     CostLayer?
   devices       DeviceIdentity[]
   poLineId      String?
@@ -636,6 +641,9 @@ model CostLayer {
   qtyRemaining  Decimal          @db.Decimal(14, 4)
   unitCost      Decimal          @db.Decimal(14, 4)
   bucket        String           @default("SALEABLE") // SALEABLE, INSPECTION, SUPPLIER_HOLD, WRITTEN_OFF
+  // Stock from a quick receive whose cost is not entered yet (unitCost 0). It can be sold and returned; anything
+  // else that would carry its cost (transfer, write-off, repair, supplier claim) waits until the cost is added.
+  costPending   Boolean          @default(false)
   // Layers not created by a GRN (returns, transfers, adjustments) keep their source and origin layer.
   sourceType    String?
   sourceId      String?

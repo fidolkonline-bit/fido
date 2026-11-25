@@ -17,6 +17,19 @@ async function stockAt(at: Date, locationIds: string[]) {
   return { cost: D(r?.cost), retail: D(r?.retail) };
 }
 
+// Units sold in the period from quick-received stock still waiting for its cost: they count at cost 0 until the owner
+// adds it, so profit shown is too high until then.
+async function costPendingAlerts(ctx: Ctx) {
+  const rows = await db.costAllocation.findMany({
+    where: { costLayer: { costPending: true }, saleLine: { sale: { stage: "FINAL", soldAt: inPeriod(ctx), locationId: locIn(ctx) } } },
+    select: { qty: true, returnedQty: true },
+  });
+  const units = rows.reduce((a, r) => a.plus(r.qty).minus(r.returnedQty), ZERO);
+  if (units.lte(0)) return [];
+  const grns = await db.goodsReceipt.count({ where: { status: "PENDING_COST" } });
+  return [`${units.toString()} unit${units.eq(1) ? "" : "s"} sold in this period came from stock still waiting for its cost (${grns} GRN${grns === 1 ? "" : "s"} under Purchases → Waiting for cost). They count at cost 0 until the cost is added, so profit here is higher than it really is.`];
+}
+
 // RP-01 in the old Clicky layout, which banks already receive. Every line of that page is kept, in its order and with its
 // wording; lines this system has no record of (purchase/sell shipping, production, bulk returns …) show Rs 0.00.
 // Net Profit follows the formula printed under it; costs Clicky had no line for are folded into the nearest line:
@@ -127,6 +140,7 @@ export async function profitLoss(ctx: Ctx): Promise<Result> {
     .concat(results.map((r) => ({ item: r.label, amount: r.value, _tone: r.label === "Net Profit" && D(r.value).lt(0) ? "err" as const : "ok" as const })));
   return {
     title: "Profit / Loss Report",
+    alerts: await costPendingAlerts(ctx),
     sheet,
     columns: [{ key: "item", label: "Line" }, { key: "amount", label: "Amount", kind: "money" }],
     rows,

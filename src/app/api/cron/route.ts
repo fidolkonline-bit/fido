@@ -6,6 +6,7 @@ import { generateRecurringExpenses, generateSubscriptions } from "@/lib/drafts";
 import { remindInstalments } from "@/lib/instalments";
 import { db } from "@/lib/db";
 import { nightlyAttendance } from "@/lib/attendance-night";
+import { remindPendingCost } from "@/lib/quick-receive";
 
 export const dynamic = "force-dynamic";
 
@@ -20,8 +21,10 @@ export async function GET(req: Request) {
   const [sms, pushes] = await Promise.all([dispatchSms(50), dispatchTaskPushes()]);
   // After the nightly cutoff: forgotten clock-outs are closed (flagged for review) and open drawers reported.
   const attendance = await nightlyAttendance();
+  // GRNs quick-received without cost: one morning reminder to the owners while any are still waiting.
+  const pendingCost = await remindPendingCost().catch((e) => { console.error("pending-cost reminder failed", e); return 0; });
   // Housekeeping (cheap, safe to repeat): old error-log rows, sign-in tries and notifications are dropped after 90 days.
   const old = new Date(Date.now() - 90 * 86_400_000);
   await Promise.all([db.errorLog.deleteMany({ where: { createdAt: { lt: old } } }), db.loginAttempt.deleteMany({ where: { createdAt: { lt: old } } }), db.notification.deleteMany({ where: { createdAt: { lt: old } } })]);
-  return NextResponse.json({ reminders, escalated, expenses, subscriptions, instalments, sms, pushes, attendance });
+  return NextResponse.json({ reminders, escalated, expenses, subscriptions, instalments, sms, pushes, attendance, pendingCost });
 }

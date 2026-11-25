@@ -19,6 +19,7 @@ export type Result = {
   totals?: Record<string, Cell>;
   summary?: { label: string; value: Cell; kind?: Col["kind"]; note?: string }[];
   notes?: string[];
+  alerts?: string[]; // shown above the result, e.g. profit that is not final yet
 };
 
 export type Ctx = {

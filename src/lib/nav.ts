@@ -45,6 +45,7 @@ export const NAV: NavGroup[] = [
     key: "purchases", label: "Purchases",
     items: [
       { label: "Receive goods / GRN", href: "/purchases", perm: "purchases.view" },
+      { label: "Quick receive (no cost)", href: "/purchases/quick", perm: "purchases.quick_receive" },
       { label: "Purchase orders", href: "/purchases/orders", perm: "purchases.view" },
       { label: "Supplier returns / recovery", href: "/purchases/returns", perm: "purchases.view" },
       { label: "Trade-ins / used phones", href: "/trade-ins", perm: "purchases.view" },

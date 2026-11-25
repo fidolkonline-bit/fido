@@ -33,7 +33,7 @@ export async function contactStats(ids: string[], supplier: boolean): Promise<Ma
       db.goodsReceipt.groupBy({ by: ["supplierId"], where: { supplierId: { in: ids }, status: "POSTED" }, _sum: { total: true, paid: true }, _count: true, _max: { receivedAt: true } }),
       db.supplierClaim.groupBy({ by: ["supplierId"], where: { supplierId: { in: ids }, status: "SETTLED" }, _sum: { creditAmount: true } }),
     ]);
-    for (const r of grnAgg) Object.assign(get(r.supplierId), { docTotal: D(r._sum.total), docPaid: D(r._sum.paid), docCount: r._count, last: r._max.receivedAt });
+    for (const r of grnAgg) if (r.supplierId) Object.assign(get(r.supplierId), { docTotal: D(r._sum.total), docPaid: D(r._sum.paid), docCount: r._count, last: r._max.receivedAt });
     for (const r of claimAgg) get(r.supplierId).docCredited = D(r._sum.creditAmount);
   } else {
     const [saleAgg, creditAgg] = await Promise.all([

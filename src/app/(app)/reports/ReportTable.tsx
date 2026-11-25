@@ -34,9 +34,11 @@ function SheetView({ sheet }: { sheet: Sheet }) {
 
 // Summary tiles, the table with its totals row, and the notes of a report result. Shared by Reports and "My commission".
 export function ReportTable({ result }: { result: Result }) {
-  if (result.sheet) return <><SheetView sheet={result.sheet} />{result.notes?.map((n) => <p key={n} className="small muted" style={{ margin: 0 }}>{n}</p>)}</>;
+  const alerts = result.alerts?.map((a) => <p key={a} className="note" role="status" style={{ margin: 0 }}>{a}</p>);
+  if (result.sheet) return <>{alerts}<SheetView sheet={result.sheet} />{result.notes?.map((n) => <p key={n} className="small muted" style={{ margin: 0 }}>{n}</p>)}</>;
   return (
     <>
+      {alerts}
       {result.summary && <div className="stats">{result.summary.map((s) => <Stat key={s.label} label={s.label} value={fmtCell(s.value, s.kind) || "—"} basis={s.note} />)}</div>}
       <div className={"tablewrap" + (result.columns.length <= 6 ? " cards" : "")}>
         {result.rows.length === 0 ? <div className="empty">No data for these filters.</div> : (

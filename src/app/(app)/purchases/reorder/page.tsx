@@ -53,7 +53,7 @@ export default async function Reorder({ searchParams }: { searchParams: Promise<
   for (const p of need) {
     const l = lastOf.get(p.id);
     const key = l?.receipt.supplierId ?? "";
-    const g = groups.get(key) ?? { name: l?.receipt.supplier.name ?? "No supplier yet (imported / never received)", rows: [] };
+    const g = groups.get(key) ?? { name: l?.receipt.supplier?.name ?? "No supplier yet (imported / never received)", rows: [] };
     g.rows.push(p); groups.set(key, g);
   }
   const shown = [...groups.entries()].filter(([k]) => !supplier || k === supplier).sort((a, b) => b[1].rows.length - a[1].rows.length);

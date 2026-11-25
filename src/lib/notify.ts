@@ -4,7 +4,7 @@ import { db } from "./db";
 import { liveSubscriptions, sendPush } from "./push";
 import type { Permission } from "./permissions";
 
-export type NotificationKind = "CLOCK_IN" | "CLOCK_OUT" | "AUTO_CLOCK_OUT" | "DRAWER_OPEN";
+export type NotificationKind = "CLOCK_IN" | "CLOCK_OUT" | "AUTO_CLOCK_OUT" | "DRAWER_OPEN" | "GRN_COST_PENDING";
 
 // Tell everyone whose role has `permission` (owners and managers): a row for the bell, and a push to their installed
 // app. The person who caused it is left out. Never throws: an alert must not break a sign-in or a clock-out.
