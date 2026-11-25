@@ -2,6 +2,7 @@ import { db } from "../db";
 import type { ReportDef, Row } from "./types";
 import { D, ZERO, sum, inPeriod, locIn, totalsOf, groupSum } from "./util";
 import { channelLabel } from "../sale-channels";
+import { commissionRoleLabel } from "../credit-commission-rules";
 import { commissionPeople, commissionStatement } from "../commission-statement";
 import { profitLoss, profitBy, PROFIT_TABS } from "./profit-loss";
 
@@ -77,7 +78,7 @@ export const salesReports: ReportDef[] = [
   },
   {
     id: "RP-12", slug: "commissions", title: "Sales representative / commissions", group: "Profit & sales",
-    basis: "Commission accrued on sales in the period (category pool × share), technician commission on collected repairs (share of labour), reversals from returns, and payout state. Target bonuses are in RP-35.",
+    basis: "Commission accrued on sales in the period (category pool × share), credit-sale commission (a fixed amount per phone on Fintrex and instalment sales), technician commission on collected repairs (share of labour), reversals from returns, and payout state. Target bonuses are in RP-35.",
     params: [
       { key: "view", label: "View", options: [["invoice", "Each invoice"], ["summary", "Summary by person"]] },
       { key: "person", label: "Person", options: commissionPeople, search: true },
@@ -92,7 +93,7 @@ export const salesReports: ReportDef[] = [
       });
       const loc = ctx.locationIds.length > 1 ? "all" : ctx.locationIds[0] ?? "";
       const statement = (id: string) => `/reports/commissions?${new URLSearchParams({ view: "invoice", person: id, period: "custom", from: ctx.fromYmd, to: ctx.toYmd, loc })}`;
-      const rows: Row[] = [...g.entries()].map(([k, v]) => { const [id, name, role] = k.split("|"); return { _href: statement(id), name, role: role === "USER" ? "Salesperson" : role === "TECHNICIAN" ? "Technician (repairs)" : "Agent", basis: v.basis, accrued: v.accrued, reversed: v.reversed, net: v.accrued.plus(v.reversed), paid: v.settled, approved: v.approved, pending: v.pending }; });
+      const rows: Row[] = [...g.entries()].map(([k, v]) => { const [id, name, role] = k.split("|"); return { _href: statement(id), name, role: commissionRoleLabel(role), basis: v.basis, accrued: v.accrued, reversed: v.reversed, net: v.accrued.plus(v.reversed), paid: v.settled, approved: v.approved, pending: v.pending }; });
       return {
         columns: [{ key: "name", label: "Recipient" }, { key: "role", label: "Type" }, { key: "basis", label: "Eligible sales", kind: "money" }, { key: "accrued", label: "Accrued", kind: "money" }, { key: "reversed", label: "Return reversals", kind: "money" }, { key: "net", label: "Net", kind: "money" }, { key: "paid", label: "Paid", kind: "money" }, { key: "approved", label: "Approved, unpaid", kind: "money" }, { key: "pending", label: "Not approved", kind: "money" }],
         rows, totals: totalsOf(rows, ["basis", "accrued", "reversed", "net", "paid", "approved", "pending"]),

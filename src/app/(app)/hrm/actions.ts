@@ -9,6 +9,8 @@ import * as H from "@/lib/hr";
 import * as P from "@/lib/payroll";
 import { D } from "@/lib/money";
 import { formError, num, str } from "@/lib/forms";
+import { saveSetting } from "@/lib/settings";
+import { creditCommissionSchema } from "@/lib/credit-commission";
 
 type Res = { error?: string; ok?: string } | undefined;
 async function wrap(paths: string[], fn: () => Promise<unknown>, ok = "Saved."): Promise<Res> {
@@ -228,6 +230,19 @@ export async function approveCommissionForm(f: FormData) {
   const upTo = String(f.get("upTo") ?? "");
   await P.approveCommission(user, String(f.get("recipientId")), /^\d{4}-\d{2}-\d{2}$/.test(upTo) ? new Date(`${upTo}T23:59:59.999+05:30`) : new Date());
   revalidatePath("/hrm/commissions");
+}
+
+// Fixed amount per phone sold on credit (Fintrex / instalment plan), paid on top of the category commission.
+export async function saveCreditCommissionForm(_: Res, f: FormData): Promise<Res> {
+  const user = await requirePermission("commissions.manage");
+  try {
+    const v = creditCommissionSchema.parse({ fintrex: num(f, "fintrex") ?? 0, instalment: num(f, "instalment") ?? 0 });
+    await saveSetting("creditCommission", v, user.personId);
+  } catch (e) {
+    return formError(e);
+  }
+  revalidatePath("/hrm/commissions");
+  return { ok: "Saved. The new amounts apply to credit sales and instalment plans made from now on." };
 }
 
 export async function payCommissionForm(_: Res, f: FormData): Promise<Res> {

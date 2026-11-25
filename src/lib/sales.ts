@@ -16,6 +16,7 @@ import { checkDiscountLimits } from "./discount-limits";
 import { getLoyalty, pointsFor } from "./loyalty";
 import { requireDrawer } from "./register";
 import { SALE_CHANNELS } from "./sale-channels";
+import { syncCreditCommission } from "./credit-commission";
 
 export const saleInput = z.object({
   idempotencyKey: z.string().min(8).max(80),
@@ -291,6 +292,8 @@ export async function finalizeSale(user: CurrentUser, raw: unknown) {
     }
 
     if (taxTotal.gt(0)) await tx.sale.update({ where: { id: sale.id }, data: { tax: taxTotal } });
+    // Phones sold through Fintrex earn the salesperson the credit commission on top of the category commission.
+    if (input.channel === "FINTREX") await syncCreditCommission(tx, sale.id);
 
     // Loyalty points for a named customer, on the invoice total.
     if (input.customerId) {
@@ -314,6 +317,7 @@ export async function finalizeSale(user: CurrentUser, raw: unknown) {
 export async function setSaleChannel(user: CurrentUser, saleId: string, raw: { channel: unknown; channelRef: unknown }) {
   const { channel, channelRef } = z.object({ channel: z.enum(SALE_CHANNELS), channelRef: z.string().trim().max(80).nullable() }).parse(raw);
   return posting(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "Sale" WHERE id = ${saleId} FOR UPDATE`;
     const sale = await tx.sale.findUnique({ where: { id: saleId }, select: { stage: true, customerId: true, channel: true, channelRef: true, locationId: true } });
     if (!sale || sale.stage !== "FINAL") throw new SaleError("Sale not found.");
     if (!user.locations.some((l) => l.id === sale.locationId)) throw new SaleError("This sale belongs to another location.");
@@ -321,6 +325,8 @@ export async function setSaleChannel(user: CurrentUser, saleId: string, raw: { c
     const ref = channel === "IN_STORE" ? null : channelRef || null;
     if (sale.channel === channel && sale.channelRef === ref) return;
     await tx.sale.update({ where: { id: saleId }, data: { channel, channelRef: ref } });
+    // Into or out of Fintrex: the credit commission follows (added, moved to the instalment rate, or taken back).
+    if (sale.channel === "FINTREX" || channel === "FINTREX") await syncCreditCommission(tx, saleId);
     await tx.auditEvent.create({ data: { actorId: user.personId, action: "SALE_TYPE_CHANGED", subjectType: "Sale", subjectId: saleId, detail: { from: sale.channel, fromRef: sale.channelRef, to: channel, toRef: ref } } });
   });
 }

@@ -10,7 +10,8 @@ import { PageHead, DataTable, Badge, Pager, PAGE_SIZE, pageOf } from "@/componen
 import { ActionForm } from "@/components/ActionForm";
 import { SearchSelect } from "@/components/SearchSelect";
 import { SubmitButton } from "@/components/SubmitButton";
-import { approveCommissionForm, payCommissionForm } from "../actions";
+import { approveCommissionForm, payCommissionForm, saveCreditCommissionForm } from "../actions";
+import { getCreditCommission } from "@/lib/credit-commission";
 
 export const metadata = { title: "Commission payout" };
 
@@ -37,12 +38,14 @@ export default async function Commissions({ searchParams }: { searchParams: Prom
     ...(method === "DIRECT" || method === "PAYROLL" ? { method } : {}),
     ...(from || to ? { createdAt: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {}),
   };
-  const [allGroups, found, paidTo, accounts] = await Promise.all([
+  const [allGroups, found, paidTo, accounts, credit] = await Promise.all([
     commissionOutstanding(who || undefined),
     db.commissionSettlement.findMany({ where: payoutWhere, orderBy: { createdAt: "desc" }, skip: (page - 1) * PAGE_SIZE, take: PAGE_SIZE + 1, include: { recipient: true, payslip: { include: { run: true } } } }),
     db.commissionSettlement.findMany({ distinct: ["recipientId"], select: { recipient: { select: { id: true, fullName: true } } } }),
     db.account.findMany({ where: { active: true, type: { in: ["BANK", "CASH"] } }, select: { id: true, name: true } }),
+    getCreditCommission(),
   ]);
+  const creditOn = credit.fintrex > 0 || credit.instalment > 0;
   const groups = allGroups
     .filter((g) => (type === "employee" ? !!g.recipient.employee : type === "agent" ? !g.recipient.employee : true))
     .filter((g) => (state === "pending" ? g.pending.abs().gt(0) : state === "approved" ? g.approved.gt(0) : true));
@@ -58,6 +61,21 @@ export default async function Commissions({ searchParams }: { searchParams: Prom
     <div className="stack">
       <PageHead eyebrow="HRM" title="Commission payout" />
       <p className="small muted" style={{ margin: 0 }}>Commission accrues on each sale and is reversed by returns. Approve it up to a date (usually the last day of the month), then pay it either directly or through payroll — each commission line can be paid only once. "View statement" lists every invoice behind the amount.</p>
+      <details className="panel" id="credit" open={!creditOn}>
+        <summary><strong>Credit sale commission</strong> <span className="small muted">— {creditOn ? `Fintrex ${money(credit.fintrex)} · instalment ${money(credit.instalment)} per phone` : "off"}</span></summary>
+        <ActionForm action={saveCreditCommissionForm} className="stack" style={{ marginTop: 10 }}>
+          <div className="grid2">
+            <label className="field"><span>Per phone sold through Fintrex (Rs)</span><input name="fintrex" type="number" min="0" step="0.01" defaultValue={credit.fintrex} inputMode="decimal" /></label>
+            <label className="field"><span>Per phone on a shop instalment plan (Rs)</span><input name="instalment" type="number" min="0" step="0.01" defaultValue={credit.instalment} inputMode="decimal" /></label>
+          </div>
+          <p className="small muted" style={{ margin: 0 }}>
+            Paid to the sale&apos;s salesperson (or the employee who rang it up when none was chosen), on top of the normal category commission, for each phone (IMEI/serial item) on the sale.
+            A Fintrex sale earns it when sold; the shop&apos;s own credit sale earns it when its instalment plan is made. Returning the phone or cancelling the plan takes it back.
+            It is approved and paid with the rest of commission, and shows as its own line on the payslip. 0 switches it off.
+          </p>
+          <div className="form-actions" style={{ marginTop: 0 }}><SubmitButton>Save</SubmitButton></div>
+        </ActionForm>
+      </details>
       <form className="toolbar dense" role="search" key={Object.values(query).join("|")}>
         <div style={{ flex: "0 1 240px" }}>
           <SearchSelect name="who" label="Recipient" options={recipients.map(([id, name]) => ({ id, name }))} defaultValue={who} noneLabel="Everyone" placeholder="Search person…" />

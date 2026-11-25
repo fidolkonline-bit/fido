@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { requirePermission, can } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { D, money, qty, fmtDateTime, fmtDate } from "@/lib/money";
+import { CREDIT_ROLE_LABEL, isCreditRole } from "@/lib/credit-commission-rules";
 import { WhatsAppLink } from "@/components/WhatsAppLink";
 import { PageHead, DataTable, RowLink, Badge } from "@/components/ui";
 import { PrintOnLoad } from "./PrintOnLoad";
@@ -167,7 +168,7 @@ export default async function SaleDetail({ params, searchParams }: { params: Pro
               <div className="panel">
                 <h2>Commission · {sale.commissionMode.toLowerCase()}</h2>
                 {sale.lines.flatMap((l) => l.accruals.map((a) => (
-                  <div className="totalrow small" key={a.id}><span>{a.recipient.fullName} · {a.role.toLowerCase()} · {l.nameSnapshot}</span><strong>{money(a.amount)}</strong></div>
+                  <div className="totalrow small" key={a.id}><span>{a.recipient.fullName} · {isCreditRole(a.role) ? `credit commission (${CREDIT_ROLE_LABEL[a.role].toLowerCase()})` : a.role.toLowerCase()} · {l.nameSnapshot}</span><strong>{money(a.amount)}</strong></div>
                 )))}
                 {sale.lines.every((l) => l.accruals.length === 0) && <p className="small muted">No commission accrued (category rates are zero).</p>}
               </div>

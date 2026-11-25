@@ -7,6 +7,7 @@ import { bandText, MODE_LABEL, nextBand, type Band } from "@/lib/target-calc";
 import * as H from "@/lib/hr";
 import { PageHead, DataTable, Badge, Stat } from "@/components/ui";
 import { DaysDetail, type Day } from "../../targets/DaysDetail";
+import { CreditCommission } from "./CreditCommission";
 
 export const metadata = { title: "My targets" };
 
@@ -27,9 +28,10 @@ export default async function MyTargets() {
   ]);
   if (!targets.length) {
     return (
-      <div className="stack" style={{ maxWidth: 600 }}>
+      <div className="stack">
         <PageHead eyebrow="HRM" title="My targets" />
-        <p className="note">You don&apos;t have a sales target yet. When the owner sets one under HRM → Sales targets, it shows here with your progress.</p>
+        <p className="note" style={{ maxWidth: 600 }}>You don&apos;t have a sales target yet. When the owner sets one under HRM → Sales targets, it shows here with your progress.</p>
+        <CreditCommission personId={user.personId} />
       </div>
     );
   }
@@ -111,6 +113,8 @@ export default async function MyTargets() {
           ))}
         </section>
       )}
+
+      <CreditCommission personId={user.personId} />
 
       {past.length > 0 && (
         <section>

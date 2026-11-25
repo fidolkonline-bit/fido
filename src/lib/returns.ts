@@ -7,6 +7,8 @@ import { nextNumber } from "./numbering";
 import { deriveLayer } from "./stock";
 import type { CurrentUser } from "./auth";
 import { requireDrawer } from "./register";
+import { syncCreditCommission } from "./credit-commission";
+import { isCreditRole } from "./credit-commission-rules";
 
 export const DISPOSITIONS = {
   SALEABLE: "Back to saleable stock (original lot)",
@@ -188,7 +190,9 @@ export async function postReturn(user: CurrentUser, raw: unknown) {
       await tx.saleLine.update({ where: { id: line.id }, data: { returnedQty: { increment: qty } } });
 
       // Commission: reverse the returned share of each original accrual (§9.2); paid commission is adjusted later, not edited.
-      for (const acc of line.accruals.filter((a) => D(a.amount).gt(0))) {
+      // Credit-sale commission is per phone and can already have moved (plan cancelled, sale type changed), so it is
+      // brought in line with the phones still sold instead.
+      for (const acc of line.accruals.filter((a) => D(a.amount).gt(0) && !isCreditRole(a.role))) {
         await tx.commissionAccrual.create({
           data: {
             saleLineId: line.id, recipientId: acc.recipientId, role: acc.role, basis: D(acc.basis).div(line.qty).mul(qty).neg().toDecimalPlaces(2),
@@ -196,6 +200,7 @@ export async function postReturn(user: CurrentUser, raw: unknown) {
           },
         });
       }
+      await syncCreditCommission(tx, sale.id, { lineId: line.id, returnLineId: retLine.id });
     }
 
     // Settlement: unpaid debt on the sale is offset first; only the excess is refunded or credited (§11).

@@ -7,6 +7,7 @@ import { attendance, dateOnly, dateOnlyYmd, salaryOn, HrError } from "./hr";
 import type { CurrentUser } from "./auth";
 import { attachCheque } from "./payments";
 import { openDrawer } from "./register";
+import { isCreditRole } from "./credit-commission-rules";
 
 export type PayLine = { kind: "EARNING" | "DEDUCTION"; label: string; amount: string; source: "COMPONENT" | "COMMISSION" | "LEAVE" | "MANUAL" | "TARGET"; note?: string; refIds?: string[] };
 
@@ -100,7 +101,17 @@ async function computeSlip(tx: Tx, employeeId: string, start: string, end: strin
   const comm = await tx.commissionAccrual.findMany({ where: { recipientId: emp.personId, settlementId: null, approvedAt: { not: null } } });
   const commTotal = r2(comm.reduce((a, c) => a.plus(c.amount), ZERO));
   const commissionIds = commTotal.gt(0) ? comm.map((c) => c.id) : [];
-  if (commTotal.gt(0)) lines.push({ kind: "EARNING", label: "Sales commission (approved)", amount: commTotal.toString(), source: "COMMISSION" });
+  if (commTotal.gt(0)) {
+    // Shown in two lines: the normal commission, and the extra per-phone commission on Fintrex / instalment sales.
+    const credit = comm.filter((c) => isCreditRole(c.role));
+    const creditTotal = r2(credit.reduce((a, c) => a.plus(c.amount), ZERO));
+    const normal = commTotal.minus(creditTotal);
+    if (!normal.eq(0)) lines.push({ kind: "EARNING", label: "Sales commission (approved)", amount: normal.toFixed(2), source: "COMMISSION" });
+    if (!creditTotal.eq(0)) {
+      const kinds = [...new Set(credit.map((c) => (c.role === "FINTREX" ? "Fintrex" : "instalment")))].join(" / ");
+      lines.push({ kind: "EARNING", label: `Credit sale commission — ${kinds} (approved)`, amount: creditTotal.toFixed(2), source: "COMMISSION" });
+    }
+  }
 
   // Rest-day / holiday work is listed for the reviewer; add a manual earning if the shop pays extra for it.
   if (offDays > 0) lines.push({ kind: "EARNING", label: `Worked on rest days / holidays: ${offDays} (review — not paid automatically)`, amount: "0.00", source: "LEAVE" });

@@ -6,6 +6,7 @@ import { nextNumber } from "./numbering";
 import { applyPayments, dueDates, splitAmount, type DueState } from "./instalment-rules";
 import { enqueueSms, kickSms } from "./sms";
 import type { CurrentUser } from "./auth";
+import { syncCreditCommission } from "./credit-commission";
 
 export class InstalmentError extends Error {}
 
@@ -45,14 +46,25 @@ export async function createPlan(user: CurrentUser, raw: unknown) {
         dues: { create: amounts.map((amount, i) => ({ seq: i + 1, amount, dueAt: dates[i] })) },
       },
     });
+    // The salesperson earns the instalment credit commission on the phones once the plan is made.
+    await syncCreditCommission(tx, sale.id);
     await tx.auditEvent.create({ data: { actorId: user.personId, action: "INSTALMENT_PLAN_CREATED", subjectType: "Sale", subjectId: sale.id, detail: { number, financed: due.toString(), count: input.count, frequency: input.frequency } } });
     return { id: plan.id, number };
   });
 }
 
+// Cancelling a plan takes back the instalment credit commission it earned (as a minus row; paid rows are not edited).
 export async function cancelPlan(user: CurrentUser, planId: string) {
-  const plan = await db.instalmentPlan.update({ where: { id: planId }, data: { status: "CANCELLED" } });
-  await db.auditEvent.create({ data: { actorId: user.personId, action: "INSTALMENT_PLAN_CANCELLED", subjectType: "Sale", subjectId: plan.saleId, detail: { number: plan.number } } });
+  await posting(async (tx) => {
+    const found = await tx.instalmentPlan.findUnique({ where: { id: planId }, select: { saleId: true } });
+    if (!found) throw new InstalmentError("Plan not found.");
+    await tx.$queryRaw`SELECT id FROM "Sale" WHERE id = ${found.saleId} FOR UPDATE`;
+    const plan = await tx.instalmentPlan.findUniqueOrThrow({ where: { id: planId } });
+    if (plan.status === "CANCELLED") return;
+    await tx.instalmentPlan.update({ where: { id: planId }, data: { status: "CANCELLED" } });
+    await syncCreditCommission(tx, plan.saleId);
+    await tx.auditEvent.create({ data: { actorId: user.personId, action: "INSTALMENT_PLAN_CANCELLED", subjectType: "Sale", subjectId: plan.saleId, detail: { number: plan.number } } });
+  });
 }
 
 type PlanWith = { paidBefore: unknown; financed: unknown; dues: { seq: number; dueAt: Date; amount: unknown }[]; sale: { paid: unknown; credited: unknown } };

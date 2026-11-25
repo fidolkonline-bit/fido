@@ -51,7 +51,7 @@ export default async function MyCommission({ searchParams }: { searchParams: Pro
       <p className="small" style={{ margin: 0 }}>
         <strong>Commission statement · {user.name} · {from} to {to}</strong>
         <span className="muted"> Generated {new Date().toLocaleString("en-GB", { timeZone: "Asia/Colombo" })}.</span>
-        <span className="muted no-print"> Sales-target bonuses are separate: see <a href="/hrm/me/targets">My targets</a>.</span>
+        <span className="muted no-print"> Sales-target bonuses are separate, and credit-sale commission is summed up there too: see <a href="/hrm/me/targets">My targets</a>.</span>
       </p>
       <ReportTable result={result} />
     </div>
