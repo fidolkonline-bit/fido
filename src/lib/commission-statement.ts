@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import { db } from "./db";
 import { D, ZERO } from "./money";
 import type { Result, Row, ParamOptions } from "./reports/types";
-import { CREDIT_ROLE_LABEL, isCreditRole } from "./credit-commission-rules";
+import { CREDIT_ROLE_LABEL, heldForCollection, isCreditRole, saleDueAmount } from "./credit-commission-rules";
 
 // Everyone who can earn commission or has earned it: the "Person" filter of the commission report.
 export async function commissionPeople(): Promise<ParamOptions> {
@@ -16,7 +16,7 @@ export async function commissionPeople(): Promise<ParamOptions> {
 type Group = {
   date: Date; doc: string; href?: string; customer: string; status: string;
   total: Prisma.Decimal | null; paid: Prisma.Decimal | null;
-  person: string; amount: Prisma.Decimal; returnLines: Set<string>; kind: "SALE" | "RETURN" | "REPAIR" | "CREDIT";
+  person: string; amount: Prisma.Decimal; returnLines: Set<string>; kind: "SALE" | "RETURN" | "REPAIR" | "CREDIT"; held?: boolean;
 };
 
 function payState(total: Prisma.Decimal.Value, paid: Prisma.Decimal.Value, credited: Prisma.Decimal.Value = 0) {
@@ -29,8 +29,8 @@ function payState(total: Prisma.Decimal.Value, paid: Prisma.Decimal.Value, credi
  * Commission statement, one row per invoice per person (the old "Sales Representative Report").
  * Rows come from commission entries created in the period: a sale's entries are made when it is sold, a return's
  * reversals when the goods come back (shown as their own negative row, so a statement already paid never changes),
- * and a repair technician's share when the job is collected. Credit-sale commission (per phone on a Fintrex sale or
- * an instalment plan) is its own row under the invoice, dated when it was earned or taken back.
+ * and a repair technician's share when the job is collected. Fintrex commission (per phone) is its own row under the
+ * invoice, dated when it was earned or taken back, and marked on hold while the sale is not yet collected in full.
  */
 export async function commissionStatement(opts: { from: Date; to: Date; personId?: string; locationIds?: string[] }): Promise<Result> {
   const loc = opts.locationIds ? { in: opts.locationIds } : undefined;
@@ -62,7 +62,11 @@ export async function commissionStatement(opts: { from: Date; to: Date; personId
       base = { kind: "RETURN", date: ret.saleReturn.createdAt, doc: `${ret.saleReturn.number} (return of ${sale.number})`, href: `/returns/${ret.saleReturn.id}`, customer: sale.customer?.name ?? "Walk-In Customer", status: "Return", total: ZERO, paid: null };
     } else if (sale && isCreditRole(a.role)) {
       key = `C|${sale.id}|${a.recipientId}|${a.role}`;
-      base = { kind: "CREDIT", date: a.createdAt, doc: `${sale.number} · credit commission`, href: `/sales/${sale.id}`, customer: sale.customer?.name ?? "Walk-In Customer", status: CREDIT_ROLE_LABEL[a.role], total: null, paid: null };
+      const held = heldForCollection(a);
+      base = {
+        kind: "CREDIT", held, date: a.createdAt, doc: `${sale.number} · ${a.role === "FINTREX" ? "Fintrex" : "credit"} commission`, href: `/sales/${sale.id}`, customer: sale.customer?.name ?? "Walk-In Customer",
+        status: held ? `On hold — ${saleDueAmount(sale).toFixed(2)} still due` : a.role === "FINTREX" ? "Paid in full" : CREDIT_ROLE_LABEL[a.role], total: null, paid: null,
+      };
     } else if (sale) {
       key = `S|${sale.id}|${a.recipientId}`;
       base = { kind: "SALE", date: sale.soldAt, doc: sale.number, href: `/sales/${sale.id}`, customer: sale.customer?.name ?? "Walk-In Customer", status: payState(sale.total, sale.paid, sale.credited), total: D(sale.total), paid: D(sale.paid) };
@@ -82,10 +86,11 @@ export async function commissionStatement(opts: { from: Date; to: Date; personId
   const one = !!opts.personId;
   const rows: Row[] = list.map((g) => ({
     date: g.date, invoice: g.doc, customer: g.customer, status: g.status, total: g.total, paid: g.paid,
-    person: g.person, commission: g.amount, _href: g.href, _tone: g.kind === "RETURN" ? "warn" : undefined,
+    person: g.person, commission: g.amount, _href: g.href, _tone: g.kind === "RETURN" || g.held ? "warn" : undefined,
   }));
   const net = list.reduce((s, g) => s.plus(g.amount), ZERO);
   const credit = list.filter((g) => g.kind === "CREDIT").reduce((s, g) => s.plus(g.amount), ZERO);
+  const held = acc.filter((a) => heldForCollection(a)).reduce((s, a) => s.plus(a.amount), ZERO);
   const creditReturned = acc.filter((a) => a.returnLineId && isCreditRole(a.role)).reduce((s, a) => s.plus(a.amount), ZERO);
   const sumOf = (k: string) => rows.reduce((s, r) => s.plus(D(r[k] as Prisma.Decimal.Value)), ZERO);
   // Same layout as the old Clicky "Sales Representative Report": one line per invoice, the person and their commission last.
@@ -102,14 +107,15 @@ export async function commissionStatement(opts: { from: Date; to: Date; personId
     ...(credit.eq(0) && creditReturned.eq(0) ? {} : {
       summary: [
         { label: "Sales commission", value: net.minus(credit).minus(creditReturned), kind: "money" as const },
-        { label: "Credit sale commission", value: credit.plus(creditReturned), kind: "money" as const, note: "Per phone on Fintrex and instalment sales" },
+        { label: "Fintrex commission", value: credit.plus(creditReturned), kind: "money" as const, note: "Per phone on Fintrex sales" },
+        { label: "Fintrex on hold", value: held, kind: "money" as const, note: "Not paid until the sale is collected in full" },
         { label: "Total", value: net, kind: "money" as const },
       ],
     }),
     notes: [
       "Commission is earned on the invoice value when the sale is made, so unpaid (Due) invoices earn it too.",
       "Returns are their own negative rows on the day the goods came back; the original invoice row never changes.",
-      "Credit commission rows are a fixed amount per phone sold through Fintrex or put on an instalment plan, on top of the normal commission. A cancelled plan or a changed sale type takes it back as a minus row.",
+      "Fintrex commission rows are a fixed amount per phone sold through Fintrex, on top of the normal commission. They are on hold — not approved or paid — until the shop has collected the sale in full. A return or a changed sale type takes it back as a minus row.",
       ...(one ? [] : ["Pick one person to total the invoice amounts; with everyone, a sale shared by a salesperson and an agent is listed for each."]),
     ],
   };

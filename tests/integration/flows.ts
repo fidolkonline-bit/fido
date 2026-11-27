@@ -6,7 +6,7 @@ import { db } from "../../src/lib/db";
 import { finalizeSale, setSaleChannel } from "../../src/lib/sales";
 import { createTradeIn } from "../../src/lib/tradeins";
 import { openCount, postCount, saveCounted, scanInto } from "../../src/lib/stockcount";
-import { cancelPlan, createPlan, planProgress } from "../../src/lib/instalments";
+import { createPlan, planProgress } from "../../src/lib/instalments";
 import { pointsBalance, redeemPoints } from "../../src/lib/loyalty";
 import { createRepair, changeStatus, setCharges, setRoute, sendOutside, returnFromOutside, refundRepair } from "../../src/lib/repairs";
 import { postReturn } from "../../src/lib/returns";
@@ -516,12 +516,12 @@ async function main() {
     assert.equal(a2.value.toString(), a0.value.toString(), "a returned cover no longer counts");
   });
 
-  await step("credit sale commission: per phone on Fintrex and instalment sales, follows type changes, plans and returns, own payslip line", async () => {
+  await step("Fintrex commission: per phone, follows type changes and returns, held until the sale is collected in full", async () => {
     const tag = randomUUID().slice(0, 6);
     const person = await db.person.create({ data: { fullName: `Credit Seller ${tag}` } });
     const emp = await db.employeeProfile.create({ data: { personId: person.id, joinedOn: new Date("2025-01-01") } });
     await db.salaryHistory.create({ data: { employeeId: emp.id, amount: 50000, payPeriod: "MONTH", effectiveFrom: new Date("2025-01-01"), createdById: acct.personId } });
-    await db.appSetting.upsert({ where: { key: "creditCommission" }, update: { value: { fintrex: 500, instalment: 300 } }, create: { key: "creditCommission", value: { fintrex: 500, instalment: 300 } } });
+    await db.appSetting.upsert({ where: { key: "creditCommission" }, update: { value: { fintrex: 500 } }, create: { key: "creditCommission", value: { fintrex: 500 } } });
     if (!(await db.registerSession.findFirst({ where: { locationId: loc.id, closedAt: null } })))
       await db.registerSession.create({ data: { locationId: loc.id, userId: acct.personId, openingCash: 50000 } });
     const phone = await db.product.create({ data: { sku: `T-CREDIT-${tag}`, name: "Credit test phone", trackDevices: true, sellPrice: 80000, defaultCost: 0 } });
@@ -538,8 +538,8 @@ async function main() {
     };
     const sell = (deviceIds: string[], o: Record<string, unknown>) => sale(owner, { customerId: customer.id, commissionMode: "USER", salespersonId: person.id, lines: [{ productId: phone.id, qty: deviceIds.length, unitPrice: 80000, deviceIds }], ...o });
 
-    // Fintrex: 2 phones on one line → 2 × 500, to the chosen salesperson.
-    const f = await sell(devices.slice(0, 2), { channel: "FINTREX", payments: [{ method: "OTHER", amount: 160000, reference: "Fintrex" }] });
+    // Fintrex: 2 phones on one line, 20,000 down and the rest still to come from Fintrex → 2 × 500, to the salesperson.
+    const f = await sell(devices.slice(0, 2), { channel: "FINTREX", payments: [{ method: "CASH", amount: 20000 }] });
     let c = await credit(f.id);
     assert.equal(c.total, 1000); assert.ok(c.rows.every((r) => r.recipientId === person.id && r.role === "FINTREX"));
     // Wrong type corrected → taken back as a minus row; set back → earned again (no edits to old rows).
@@ -554,33 +554,41 @@ async function main() {
     c = await credit(f.id);
     assert.equal(c.total, 500); assert.ok(c.rows.some((r) => r.returnLineId && Number(r.amount) === -500));
 
-    // Shop credit: nothing at sale; the plan earns 300; cancelling takes it back.
+    // A shop credit sale with an instalment plan earns no credit commission (only Fintrex does).
     const s1 = await sell([devices[2]], { payments: [{ method: "CASH", amount: 20000 }] });
-    assert.equal((await credit(s1.id)).total, 0);
-    const first = new Date(Date.now() + 30 * 86_400_000);
-    const p1 = await createPlan(owner, { saleId: s1.id, count: 3, frequency: "MONTHLY", firstDueAt: first });
-    assert.equal((await credit(s1.id)).total, 300);
-    await cancelPlan(owner, p1.id);
-    await cancelPlan(owner, p1.id); // twice is harmless
+    await createPlan(owner, { saleId: s1.id, count: 3, frequency: "MONTHLY", firstDueAt: new Date(Date.now() + 30 * 86_400_000) });
     assert.equal((await credit(s1.id)).total, 0);
 
-    // A rate change applies to new plans only; earned rows keep their rate.
-    const s2 = await sell([devices[3]], { payments: [{ method: "CASH", amount: 20000 }] });
-    await createPlan(owner, { saleId: s2.id, count: 2, frequency: "MONTHLY", firstDueAt: first });
-    await db.appSetting.update({ where: { key: "creditCommission" }, data: { value: { fintrex: 500, instalment: 450 } } });
-    assert.equal((await credit(s2.id)).total, 300);
-
-    // Payroll: approved credit commission is its own payslip line, next to normal commission.
+    // Not collected in full: approval skips it, payroll lists it on hold at 0 and does not settle it.
     await approveCommission(owner, person.id, new Date());
+    assert.ok((await credit(f.id)).rows.every((r) => !r.approvedAt), "held Fintrex commission is not approved");
     const run = await createRun(owner, "2025-07-01", "2025-07-31", null, emp.id);
-    const slip = await db.payslip.findFirstOrThrow({ where: { runId: run.id } });
-    const lines = slip.lines as PayLine[];
-    const cl = lines.find((l) => l.label.startsWith("Credit sale commission"));
-    assert.ok(cl, "credit commission line on the payslip");
-    assert.equal(cl!.amount, "800.00"); // Fintrex 500 left after the return + instalment 300
-    assert.match(cl!.label, /Fintrex \/ instalment/);
-    const all = await db.commissionAccrual.findMany({ where: { recipientId: person.id, approvedAt: { not: null }, settlementId: null } });
-    assert.equal(slip.commissionIds.length, all.length);
+    let slip = await db.payslip.findFirstOrThrow({ where: { runId: run.id } });
+    let lines = slip.lines as PayLine[];
+    const hold = lines.find((l) => l.label.startsWith("Fintrex commission on hold"));
+    assert.ok(hold, "on-hold line on the payslip"); assert.equal(hold!.amount, "0.00"); assert.match(hold!.label, /500\.00 on 1 sale/);
+    assert.ok(!lines.some((l) => l.label.startsWith("Fintrex sale commission")));
+    const ids = (await credit(f.id)).rows.map((r) => r.id);
+    assert.ok(!slip.commissionIds.some((id) => ids.includes(id)));
+
+    // Fintrex pays the rest → the commission can be approved and joins the salary.
+    const fs = await db.sale.findUniqueOrThrow({ where: { id: f.id } });
+    await db.sale.update({ where: { id: f.id }, data: { paid: { increment: fs.total.minus(fs.paid).minus(fs.credited) } } }); // stands in for the Fintrex payment
+    await approveCommission(owner, person.id, new Date());
+    assert.ok((await credit(f.id)).rows.every((r) => r.approvedAt));
+    await calculateRun(owner, run.id);
+    slip = await db.payslip.findFirstOrThrow({ where: { runId: run.id } });
+    lines = slip.lines as PayLine[];
+    assert.equal(lines.find((l) => l.label.startsWith("Fintrex sale commission"))?.amount, "500.00");
+    assert.ok(!lines.some((l) => l.label.startsWith("Fintrex commission on hold")));
+    assert.ok(ids.every((id) => slip.commissionIds.includes(id)));
+
+    // A rate change applies to new sales only: a returned phone takes back what it earned, not the new rate.
+    const s2 = await sell([devices[3]], { channel: "FINTREX", payments: [{ method: "OTHER", amount: 80000, reference: "Fintrex" }] });
+    await db.appSetting.update({ where: { key: "creditCommission" }, data: { value: { fintrex: 700 } } });
+    const l2 = await db.saleLine.findFirstOrThrow({ where: { saleId: s2.id } });
+    await postReturn(owner, { idempotencyKey: randomUUID(), saleId: s2.id, reason: "test", settlement: "STORE_CREDIT", lines: [{ saleLineId: l2.id, qty: 1, disposition: "SALEABLE", deviceIds: [devices[3]] }] });
+    assert.equal((await credit(s2.id)).total, 0);
   });
 
   console.log("\nAll integration flows passed.");

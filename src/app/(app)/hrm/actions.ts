@@ -232,17 +232,17 @@ export async function approveCommissionForm(f: FormData) {
   revalidatePath("/hrm/commissions");
 }
 
-// Fixed amount per phone sold on credit (Fintrex / instalment plan), paid on top of the category commission.
+// Fixed amount per phone sold through Fintrex, on top of the category commission; held until the sale is paid in full.
 export async function saveCreditCommissionForm(_: Res, f: FormData): Promise<Res> {
   const user = await requirePermission("commissions.manage");
   try {
-    const v = creditCommissionSchema.parse({ fintrex: num(f, "fintrex") ?? 0, instalment: num(f, "instalment") ?? 0 });
+    const v = creditCommissionSchema.parse({ fintrex: num(f, "fintrex") ?? 0 });
     await saveSetting("creditCommission", v, user.personId);
   } catch (e) {
     return formError(e);
   }
   revalidatePath("/hrm/commissions");
-  return { ok: "Saved. The new amounts apply to credit sales and instalment plans made from now on." };
+  return { ok: "Saved. The new amount applies to Fintrex sales made from now on." };
 }
 
 export async function payCommissionForm(_: Res, f: FormData): Promise<Res> {

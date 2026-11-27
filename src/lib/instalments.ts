@@ -46,14 +46,12 @@ export async function createPlan(user: CurrentUser, raw: unknown) {
         dues: { create: amounts.map((amount, i) => ({ seq: i + 1, amount, dueAt: dates[i] })) },
       },
     });
-    // The salesperson earns the instalment credit commission on the phones once the plan is made.
-    await syncCreditCommission(tx, sale.id);
     await tx.auditEvent.create({ data: { actorId: user.personId, action: "INSTALMENT_PLAN_CREATED", subjectType: "Sale", subjectId: sale.id, detail: { number, financed: due.toString(), count: input.count, frequency: input.frequency } } });
     return { id: plan.id, number };
   });
 }
 
-// Cancelling a plan takes back the instalment credit commission it earned (as a minus row; paid rows are not edited).
+// Plans no longer earn credit commission (only Fintrex does); cancelling one still takes back any it earned earlier.
 export async function cancelPlan(user: CurrentUser, planId: string) {
   await posting(async (tx) => {
     const found = await tx.instalmentPlan.findUnique({ where: { id: planId }, select: { saleId: true } });

@@ -12,6 +12,7 @@ import { SearchSelect } from "@/components/SearchSelect";
 import { SubmitButton } from "@/components/SubmitButton";
 import { approveCommissionForm, payCommissionForm, saveCreditCommissionForm } from "../actions";
 import { getCreditCommission } from "@/lib/credit-commission";
+import { heldForCollection } from "@/lib/credit-commission-rules";
 
 export const metadata = { title: "Commission payout" };
 
@@ -24,7 +25,7 @@ export default async function Commissions({ searchParams }: { searchParams: Prom
   const canReport = can(user, "reports.view");
   const lastMonthCut = new Date(`${lastMonthEnd}T23:59:59.999+05:30`);
   // Month end: if someone still has unapproved commission from before this month, default to approving and showing last month.
-  const older = (g: { rows: { createdAt: Date; approvedAt: Date | null }[] }) => g.rows.some((r) => !r.approvedAt && r.createdAt <= lastMonthCut);
+  const older = (g: { rows: (Parameters<typeof heldForCollection>[0] & { createdAt: Date; approvedAt: Date | null })[] }) => g.rows.some((r) => !r.approvedAt && r.createdAt <= lastMonthCut && !heldForCollection(r));
   const statement = (g: Parameters<typeof older>[0] & { recipient: { id: string } }) => `/reports/commissions?view=invoice&person=${g.recipient.id}&period=${older(g) ? "lastmonth" : "month"}&loc=all`;
   const sp = await searchParams;
   const { who = "", type = "", state = "", method = "", from: fromDay = "", to: toDay = "" } = sp;
@@ -45,10 +46,10 @@ export default async function Commissions({ searchParams }: { searchParams: Prom
     db.account.findMany({ where: { active: true, type: { in: ["BANK", "CASH"] } }, select: { id: true, name: true } }),
     getCreditCommission(),
   ]);
-  const creditOn = credit.fintrex > 0 || credit.instalment > 0;
+  const creditOn = credit.fintrex > 0;
   const groups = allGroups
     .filter((g) => (type === "employee" ? !!g.recipient.employee : type === "agent" ? !g.recipient.employee : true))
-    .filter((g) => (state === "pending" ? g.pending.abs().gt(0) : state === "approved" ? g.approved.gt(0) : true));
+    .filter((g) => (state === "pending" ? g.pending.abs().gt(0) : state === "approved" ? g.approved.gt(0) : state === "held" ? !g.held.eq(0) : true));
   const recent = found.slice(0, PAGE_SIZE);
   // Recipients with either outstanding commission or past payouts, so the picker covers both tables.
   const people = new Map<string, string>();
@@ -62,16 +63,13 @@ export default async function Commissions({ searchParams }: { searchParams: Prom
       <PageHead eyebrow="HRM" title="Commission payout" />
       <p className="small muted" style={{ margin: 0 }}>Commission accrues on each sale and is reversed by returns. Approve it up to a date (usually the last day of the month), then pay it either directly or through payroll — each commission line can be paid only once. "View statement" lists every invoice behind the amount.</p>
       <details className="panel" id="credit" open={!creditOn}>
-        <summary><strong>Credit sale commission</strong> <span className="small muted">— {creditOn ? `Fintrex ${money(credit.fintrex)} · instalment ${money(credit.instalment)} per phone` : "off"}</span></summary>
+        <summary><strong>Fintrex sale commission</strong> <span className="small muted">— {creditOn ? `${money(credit.fintrex)} per phone` : "off"}</span></summary>
         <ActionForm action={saveCreditCommissionForm} className="stack" style={{ marginTop: 10 }}>
-          <div className="grid2">
-            <label className="field"><span>Per phone sold through Fintrex (Rs)</span><input name="fintrex" type="number" min="0" step="0.01" defaultValue={credit.fintrex} inputMode="decimal" /></label>
-            <label className="field"><span>Per phone on a shop instalment plan (Rs)</span><input name="instalment" type="number" min="0" step="0.01" defaultValue={credit.instalment} inputMode="decimal" /></label>
-          </div>
+          <label className="field" style={{ maxWidth: 320 }}><span>Per phone sold through Fintrex (Rs)</span><input name="fintrex" type="number" min="0" step="0.01" defaultValue={credit.fintrex} inputMode="decimal" /></label>
           <p className="small muted" style={{ margin: 0 }}>
-            Paid to the sale&apos;s salesperson (or the employee who rang it up when none was chosen), on top of the normal category commission, for each phone (IMEI/serial item) on the sale.
-            A Fintrex sale earns it when sold; the shop&apos;s own credit sale earns it when its instalment plan is made. Returning the phone or cancelling the plan takes it back.
-            It is approved and paid with the rest of commission, and shows as its own line on the payslip. 0 switches it off.
+            Earned by the sale&apos;s salesperson (or the employee who rang it up when none was chosen) for each phone (IMEI/serial item) on a Fintrex sale, on top of the normal category commission.
+            It is created when the sale is made and taken back if the phone is returned, but it stays <strong>on hold</strong> until the shop has collected the sale in full:
+            only then can it be approved and added to the salary. Held amounts show here, on the payslip and on the salesperson&apos;s My targets page. 0 switches it off.
           </p>
           <div className="form-actions" style={{ marginTop: 0 }}><SubmitButton>Save</SubmitButton></div>
         </ActionForm>
@@ -89,6 +87,7 @@ export default async function Commissions({ searchParams }: { searchParams: Prom
           <option value="">Any outstanding</option>
           <option value="pending">Needs approval</option>
           <option value="approved">Approved, unpaid</option>
+          <option value="held">Fintrex on hold</option>
         </select>
         <select name="method" defaultValue={method} aria-label="Payout method">
           <option value="">Any payout method</option>
@@ -107,6 +106,7 @@ export default async function Commissions({ searchParams }: { searchParams: Prom
           { label: "Lines", num: true, render: (g) => g.rows.length },
           { label: "Not yet approved", num: true, render: (g) => money(g.pending) },
           { label: "Approved, unpaid", num: true, render: (g) => money(g.approved) },
+          { label: "Fintrex on hold", num: true, render: (g) => g.held.eq(0) ? "" : <span title="Waiting until the shop collects these Fintrex sales in full">{money(g.held)} <span className="small muted">({g.heldSales.size} sale{g.heldSales.size === 1 ? "" : "s"} not paid in full)</span></span> },
           {
             label: "", render: (g) => (
               <div className="stack" style={{ gap: 6 }}>

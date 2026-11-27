@@ -6,13 +6,12 @@ import { D, ZERO } from "./money";
 import { CREDIT_ROLES, creditRoleOf, type CreditRole } from "./credit-commission-rules";
 
 // Credit-sale commission: a fixed amount per phone (IMEI/serial-tracked product) that the salesperson earns on top of
-// the normal category commission when the phone goes out on credit — a Fintrex sale, or the shop's own credit sale
-// once an instalment plan is made for it. It is a CommissionAccrual with role FINTREX or INSTALMENT, so it is
-// approved, paid (directly or through payroll) and reversed by returns exactly like the rest of commission.
+// the normal category commission when the phone is sold on credit, which the shop does only through Fintrex. It is a
+// CommissionAccrual with role FINTREX, created at the sale and reversed by returns like the rest of commission, but
+// held until the shop has collected the sale in full (see heldForCollection): only then can it be approved and paid.
 
 export const creditCommissionSchema = z.object({
   fintrex: z.coerce.number().min(0).max(1_000_000).default(0),
-  instalment: z.coerce.number().min(0).max(1_000_000).default(0),
 });
 export type CreditCommission = z.infer<typeof creditCommissionSchema>;
 
@@ -31,8 +30,8 @@ async function recipientOf(tx: Tx, sale: { salespersonId: string | null; created
 }
 
 /**
- * Bring a sale's credit commission in line with the sale as it is now: Fintrex or an active instalment plan, the
- * phones not returned, and the current rate. Only the difference is written, as a new row (never an edit), so
+ * Bring a sale's credit commission in line with the sale as it is now: Fintrex or not, the phones not returned, and
+ * the current rate (a sale that is not Fintrex has any credit commission taken back). Only the difference is written, as a new row (never an edit), so
  * commission already approved or paid stays as it was and a later change shows as its own plus or minus row.
  * Call inside the posting transaction that changed the sale, with the sale row locked.
  */
@@ -49,7 +48,7 @@ export async function syncCreditCommission(tx: Tx, saleId: string, opts: { lineI
   });
   const role: CreditRole | null = sale.stage === "FINAL" ? creditRoleOf(sale) : null;
   const rates = role ? await getCreditCommission(tx) : null;
-  const rate = role && rates ? D(role === "FINTREX" ? rates.fintrex : rates.instalment) : ZERO;
+  const rate = role === "FINTREX" && rates ? D(rates.fintrex) : ZERO;
   const recipientId = role && rate.gt(0) ? await recipientOf(tx, sale) : null;
   const subtotal = D(sale.subtotal);
   let written = 0;

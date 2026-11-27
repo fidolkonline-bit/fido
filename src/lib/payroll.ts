@@ -7,7 +7,7 @@ import { attendance, dateOnly, dateOnlyYmd, salaryOn, HrError } from "./hr";
 import type { CurrentUser } from "./auth";
 import { attachCheque } from "./payments";
 import { openDrawer } from "./register";
-import { isCreditRole } from "./credit-commission-rules";
+import { heldForCollection, isCreditRole, saleDueAmount } from "./credit-commission-rules";
 
 export type PayLine = { kind: "EARNING" | "DEDUCTION"; label: string; amount: string; source: "COMPONENT" | "COMMISSION" | "LEAVE" | "MANUAL" | "TARGET"; note?: string; refIds?: string[] };
 
@@ -15,25 +15,33 @@ const r2 = (v: Prisma.Decimal) => v.toDecimalPlaces(2);
 
 // ───────────── Commission (§9.2) ─────────────
 
+// Unsettled credit (Fintrex) commission rows are only payable once their sale is collected in full.
+const SALE_MONEY = { saleLine: { select: { sale: { select: { id: true, total: true, paid: true, credited: true } } } } } as const;
+
 // Outstanding = rows not yet in any settlement (accruals and their return reversals). Approved = approvedAt set.
+// Held = Fintrex commission on sales the shop has not collected in full yet; it is in neither approved nor pending.
 export async function commissionOutstanding(recipientId?: string) {
   const rows = await db.commissionAccrual.findMany({
     where: { settlementId: null, ...(recipientId ? { recipientId } : {}) },
     include: { recipient: { include: { employee: true } }, saleLine: { include: { sale: true } }, repairJob: { select: { number: true } } },
     orderBy: { createdAt: "asc" },
   });
-  const by = new Map<string, { recipient: (typeof rows)[number]["recipient"]; approved: Prisma.Decimal; pending: Prisma.Decimal; rows: typeof rows }>();
+  const by = new Map<string, { recipient: (typeof rows)[number]["recipient"]; approved: Prisma.Decimal; pending: Prisma.Decimal; held: Prisma.Decimal; heldSales: Set<string>; rows: typeof rows }>();
   for (const r of rows) {
-    const x = by.get(r.recipientId) ?? { recipient: r.recipient, approved: ZERO, pending: ZERO, rows: [] };
-    if (r.approvedAt) x.approved = x.approved.plus(r.amount); else x.pending = x.pending.plus(r.amount);
+    const x = by.get(r.recipientId) ?? { recipient: r.recipient, approved: ZERO, pending: ZERO, held: ZERO, heldSales: new Set<string>(), rows: [] };
+    if (heldForCollection(r)) { x.held = x.held.plus(r.amount); x.heldSales.add(r.saleLine!.sale.id); }
+    else if (r.approvedAt) x.approved = x.approved.plus(r.amount); else x.pending = x.pending.plus(r.amount);
     x.rows.push(r);
     by.set(r.recipientId, x);
   }
   return [...by.values()];
 }
 
+// Fintrex commission on a sale not yet collected in full is left unapproved; it can be approved once the money is in.
 export async function approveCommission(user: CurrentUser, recipientId: string, upTo: Date) {
-  const r = await db.commissionAccrual.updateMany({ where: { recipientId, settlementId: null, approvedAt: null, createdAt: { lte: upTo } }, data: { approvedAt: new Date() } });
+  const due = await db.commissionAccrual.findMany({ where: { recipientId, settlementId: null, approvedAt: null, createdAt: { lte: upTo } }, select: { id: true, role: true, ...SALE_MONEY } });
+  const ids = due.filter((a) => !heldForCollection(a)).map((a) => a.id);
+  const r = await db.commissionAccrual.updateMany({ where: { id: { in: ids }, settlementId: null, approvedAt: null }, data: { approvedAt: new Date() } });
   await db.auditEvent.create({ data: { actorId: user.personId, action: "COMMISSION_APPROVED", subjectType: "Person", subjectId: recipientId, detail: { rows: r.count } } });
   return r.count;
 }
@@ -42,7 +50,8 @@ export async function approveCommission(user: CurrentUser, recipientId: string, 
 export async function payCommissionDirect(user: CurrentUser, recipientId: string, raw: { method: string; accountId: string | null; reference: string | null }) {
   return posting(async (tx) => {
     await tx.$queryRaw`SELECT id FROM "Person" WHERE id = ${recipientId} FOR UPDATE`;
-    const rows = await tx.commissionAccrual.findMany({ where: { recipientId, settlementId: null, approvedAt: { not: null } } });
+    // Approved Fintrex commission whose sale has money due again (e.g. a bounced cheque) waits for collection.
+    const rows = (await tx.commissionAccrual.findMany({ where: { recipientId, settlementId: null, approvedAt: { not: null } }, include: SALE_MONEY })).filter((r) => !heldForCollection(r));
     const amount = r2(rows.reduce((a, r) => a.plus(r.amount), ZERO));
     if (amount.lte(0)) throw new HrError("Nothing approved to pay (returns may have reversed it). Approve commission first.");
     let accountId = raw.accountId;
@@ -98,19 +107,30 @@ async function computeSlip(tx: Tx, employeeId: string, start: string, end: strin
 
   // Approved, unsettled commission for this person is included once; approval of the run settles it.
   const emp = await tx.employeeProfile.findUniqueOrThrow({ where: { id: employeeId } });
-  const comm = await tx.commissionAccrual.findMany({ where: { recipientId: emp.personId, settlementId: null, approvedAt: { not: null } } });
+  // Fintrex commission joins the salary only once its sale is collected in full; until then it is listed, unpaid.
+  const unsettled = await tx.commissionAccrual.findMany({ where: { recipientId: emp.personId, settlementId: null }, include: SALE_MONEY });
+  const held = unsettled.filter((c) => heldForCollection(c));
+  const comm = unsettled.filter((c) => c.approvedAt && !heldForCollection(c));
   const commTotal = r2(comm.reduce((a, c) => a.plus(c.amount), ZERO));
   const commissionIds = commTotal.gt(0) ? comm.map((c) => c.id) : [];
   if (commTotal.gt(0)) {
-    // Shown in two lines: the normal commission, and the extra per-phone commission on Fintrex / instalment sales.
+    // Shown in two lines: the normal commission, and the extra per-phone commission on Fintrex sales (only once collected in full).
     const credit = comm.filter((c) => isCreditRole(c.role));
     const creditTotal = r2(credit.reduce((a, c) => a.plus(c.amount), ZERO));
     const normal = commTotal.minus(creditTotal);
     if (!normal.eq(0)) lines.push({ kind: "EARNING", label: "Sales commission (approved)", amount: normal.toFixed(2), source: "COMMISSION" });
     if (!creditTotal.eq(0)) {
-      const kinds = [...new Set(credit.map((c) => (c.role === "FINTREX" ? "Fintrex" : "instalment")))].join(" / ");
-      lines.push({ kind: "EARNING", label: `Credit sale commission — ${kinds} (approved)`, amount: creditTotal.toFixed(2), source: "COMMISSION" });
+      lines.push({ kind: "EARNING", label: "Fintrex sale commission (paid in full, approved)", amount: creditTotal.toFixed(2), source: "COMMISSION" });
     }
+  }
+  const heldTotal = r2(held.reduce((a, c) => a.plus(c.amount), ZERO));
+  if (heldTotal.gt(0)) {
+    const sales = new Map(held.map((c) => [c.saleLine!.sale.id, c.saleLine!.sale]));
+    const owed = r2([...sales.values()].reduce((a, s) => a.plus(saleDueAmount(s)), ZERO));
+    lines.push({
+      kind: "EARNING", label: `Fintrex commission on hold: ${heldTotal.toFixed(2)} on ${sales.size} sale${sales.size === 1 ? "" : "s"} (not paid yet)`, amount: "0.00", source: "COMMISSION",
+      note: `Added to the salary once the shop has collected these sales in full (${owed.toFixed(2)} still due) and the commission is approved.`,
+    });
   }
 
   // Rest-day / holiday work is listed for the reviewer; add a manual earning if the shop pays extra for it.
